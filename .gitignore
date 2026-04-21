@@ -3,3 +3,10 @@ node_modules/
 *.log
 *.BAK*
 .DS_Store
+
+
+data/
+*.bak*
+*.save*
+node_modules/
+.env

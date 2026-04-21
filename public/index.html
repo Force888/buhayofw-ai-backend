@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BuhayOFW AI</title>
+  <title>Xfrend</title>
   <link rel="stylesheet" href="/ui.css">
 </head>
 <body>
@@ -14,20 +14,20 @@
         <div class="mascotFace"></div>
       </div>
       <div>
-        <div class="title">BuhayOFW AI</div>
-        <div class="subtitle">Tagalog-first AI assistant • simple, clear, and helpful</div>
+        <div class="title">Xfrend</div>
+	<div class="subtitle">Talk, ask, or share anything • Tagalog or English</div>
       </div>
     </div>
 
-    <div class="bubbles">
-      <div class="bubble">Pwede Tagalog o English.</div>
-      <div class="bubble">Health • Legal • Self-help</div>
-      <div class="bubble warn">Not a doctor/lawyer — for guidance only.</div>
-    </div>
+<div class="bubbles">
+  <div class="bubble">Pwede Tagalog o English</div>
+  <div class="bubble">You can ask or just talk</div>
+  <div class="bubble warn">For guidance only — not a professional substitute</div>
+</div>
 
     <div class="card">
-      <label for="q" class="muted">Ask a question (Tagalog or English):</label>
-      <textarea id="q" placeholder="Halimbawa: Ano ang dapat gawin kapag masakit ang binti habang naglalakad?"></textarea>
+      <label for="q" class="muted">Type a message:</label>
+      <textarea id="q" placeholder="Kumusta ka today? May gusto ka bang pag-usapan?"></textarea>
 
       <div class="row">
         <button id="send" class="btn">Send</button>
@@ -48,13 +48,28 @@
   const out = document.getElementById('out');
   const statusEl = document.getElementById('status');
   const sendBtn = document.getElementById('send');
+  let isSending = false;
 
   function setStatus(t){ statusEl.textContent = t || ''; }
 
+  function addMessage(role, text){
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.textContent = text || '';
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+  }
+
   async function ask(){
+    if(isSending) return;
+
     const text = q.value.trim();
     if(!text) return;
-    out.textContent = '';
+
+    isSending = true;
+    addMessage('user', text);
+    q.value = '';
+
     setStatus('Thinking...');
     sendBtn.disabled = true;
 
@@ -64,14 +79,24 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: text })
       });
-      const data = await r.json();
-      out.textContent = (data && (data.answer || data.text)) ? (data.answer || data.text) : JSON.stringify(data, null, 2);
+
+      const raw = await r.text();
+
+      let data;
+      try{
+        data = JSON.parse(raw);
+      }catch{
+        throw new Error(raw || 'Invalid server response');
+      }
+
+      addMessage('assistant', (data && (data.answer || data.text)) ? (data.answer || data.text) : JSON.stringify(data, null, 2));
       setStatus('');
     }catch(e){
-      out.textContent = 'Error: ' + (e && e.message ? e.message : e);
+      addMessage('assistant', 'Error: ' + (e && e.message ? e.message : e));
       setStatus('');
     }finally{
       sendBtn.disabled = false;
+      isSending = false;
     }
   }
 
