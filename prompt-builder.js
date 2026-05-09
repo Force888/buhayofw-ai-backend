@@ -36,6 +36,11 @@ function buildSystemInstruction({ selectedCharacter, memory }) {
   return `
 ${BASE_SYSTEM_PROMPT}
 
+CRITICAL:
+Keep replies under 3 sentences.
+Do not over-explain.
+Do not end with a question unless needed.
+
 ${character.prompt}
 
 ${memoryBlock}

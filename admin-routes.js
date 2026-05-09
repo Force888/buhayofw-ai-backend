@@ -4,7 +4,10 @@ module.exports = function registerAdminRoutes(app, options) {
   const {
     SESSIONS_FILE,
     MESSAGES_FILE,
-    readJson
+    USERS_FILE,
+    CONVERSATIONS_FILE,
+    readJson,
+    CHARACTER_CONFIG
   } = options;
 
   function requireAdmin(req, res, next) {
@@ -43,6 +46,14 @@ module.exports = function registerAdminRoutes(app, options) {
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
   }
 
+  function readUsers() {
+    return readJson(USERS_FILE, []);
+  }
+
+  function readConversations() {
+    return readJson(CONVERSATIONS_FILE, []);
+  }
+
   function readMessages() {
     try {
       if (!fs.existsSync(MESSAGES_FILE)) return [];
@@ -70,6 +81,37 @@ module.exports = function registerAdminRoutes(app, options) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  function getCharacterLabel(characterId) {
+    const id = String(characterId || "general").trim() || "general";
+    return CHARACTER_CONFIG?.[id]?.label || id;
+  }
+
+  function getAuthLabel(session) {
+    return session?.logged_in ? "Member" : "Guest";
+  }
+
+  function getUserDisplay(session) {
+    if (!session?.logged_in) return session?.session_id || "—";
+    return String(session.user_name || "").trim() || session.session_id || "—";
+  }
+
+  function formatPH(isoString) {
+    if (!isoString) return "";
+    try {
+      return new Intl.DateTimeFormat("en-PH", {
+        timeZone: "Asia/Manila",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      }).format(new Date(isoString));
+    } catch (_) {
+      return String(isoString || "");
+    }
   }
 
   function pageTemplate(title, body) {
@@ -118,7 +160,6 @@ module.exports = function registerAdminRoutes(app, options) {
       background: white;
       border: 1px solid #ddd;
     }
-
     th, td {
       text-align: left;
       padding: 8px 10px;
@@ -126,45 +167,21 @@ module.exports = function registerAdminRoutes(app, options) {
       vertical-align: top;
       font-size: 14px;
     }
-
     th {
       background: #fafafa;
     }
-
     .mono {
       font-family: Consolas, monospace;
       font-size: 12px;
       word-break: break-all;
     }
-
     .preview {
-      max-width: 320px;
+      max-width: 360px;
       min-width: 220px;
       white-space: normal;
       line-height: 1.35;
       word-break: break-word;
     }
-    .col-session {
-      width: 170px;
-    }
-    .col-small {
-      width: 90px;
-      white-space: nowrap;
-    }
-    .col-medium {
-      width: 140px;
-      white-space: nowrap;
-    }
-    .col-device {
-      width: 80px;
-      white-space: nowrap;
-    }
-    .col-hash {
-      max-width: 180px;
-      word-break: break-all;
-      font-size: 12px;
-    }
-
     .chat {
       display: flex;
       flex-direction: column;
@@ -218,13 +235,14 @@ module.exports = function registerAdminRoutes(app, options) {
   <div class="topnav">
     <a href="/admin">Dashboard</a>
     <a href="/admin/sessions">Sessions</a>
+    <a href="/admin/convos">Convos</a>
+    <a href="/admin/users">Users</a>
     <a href="/admin/stats">Raw stats JSON</a>
   </div>
   ${body}
 </body>
 </html>`;
   }
-
 
   function detectCategoryFromText(text) {
     const t = String(text || "").toLowerCase();
@@ -349,16 +367,16 @@ module.exports = function registerAdminRoutes(app, options) {
 
   function getTopKeywords(messages, limit = 15) {
     const stopWords = new Set([
-      "the","a","an","and","or","but","if","then","than","that","this","those","these",
-      "is","are","was","were","be","been","being","am",
-      "i","me","my","mine","you","your","yours","we","our","ours","they","their",
-      "he","she","it","him","her","them",
-      "to","for","of","in","on","at","by","with","from","as","about","into","over","after",
-      "what","when","where","why","how","can","could","would","should","do","does","did","will",
-      "ako","ikaw","siya","kami","tayo","kayo","sila","ko","mo","niya","namin","natin","nila",
-      "ang","ng","sa","mga","ito","iyan","yun","yon","po","ba","na","pa","din","rin","lang","lamang",
-      "may","meron","wala","kasi","pero","para","paano","ano","saan","kailan","bakit",
-      "hello","hi","pls","please"
+      "the", "a", "an", "and", "or", "but", "if", "then", "than", "that", "this", "those", "these",
+      "is", "are", "was", "were", "be", "been", "being", "am",
+      "i", "me", "my", "mine", "you", "your", "yours", "we", "our", "ours", "they", "their",
+      "he", "she", "it", "him", "her", "them",
+      "to", "for", "of", "in", "on", "at", "by", "with", "from", "as", "about", "into", "over", "after",
+      "what", "when", "where", "why", "how", "can", "could", "would", "should", "do", "does", "did", "will",
+      "ako", "ikaw", "siya", "kami", "tayo", "kayo", "sila", "ko", "mo", "niya", "namin", "natin", "nila",
+      "ang", "ng", "sa", "mga", "ito", "iyan", "yun", "yon", "po", "ba", "na", "pa", "din", "rin", "lang", "lamang",
+      "may", "meron", "wala", "kasi", "pero", "para", "paano", "ano", "saan", "kailan", "bakit",
+      "hello", "hi", "pls", "please"
     ]);
 
     const counts = new Map();
@@ -416,6 +434,9 @@ module.exports = function registerAdminRoutes(app, options) {
       .slice(0, 14);
   }
 
+  function getConversationMessageCount(messages, conversationId) {
+    return messages.filter((m) => m.conversation_id === conversationId).length;
+  }
 
   app.get("/admin/sessions/:sessionId/toggle-test", requireAdmin, (req, res) => {
     const sessionId = req.params.sessionId;
@@ -439,18 +460,24 @@ module.exports = function registerAdminRoutes(app, options) {
   });
 
   app.get("/admin", requireAdmin, (req, res) => {
-const allSessions = readJson(SESSIONS_FILE, []);
-const includeTest = String(req.query.include_test || "0") === "1";
-const sessions = includeTest
-  ? allSessions
-  : allSessions.filter((s) => !s.is_test);
+    const allSessions = readJson(SESSIONS_FILE, []);
+    const includeTest = String(req.query.include_test || "0") === "1";
+    const sessions = includeTest
+      ? allSessions
+      : allSessions.filter((s) => !s.is_test);
 
     const messages = readMessages();
+    const users = readUsers();
+
     const today = new Date().toISOString().slice(0, 10);
 
     const sessionsToday = sessions.filter((s) =>
       String(s.created_at || "").startsWith(today) ||
       String(s.last_active_at || "").startsWith(today)
+    );
+
+    const usersToday = users.filter((u) =>
+      String(u.created_at || "").startsWith(today)
     );
 
     const totals = sessions.reduce(
@@ -498,44 +525,25 @@ const sessions = includeTest
       messageMap.get(m.session_id).push(m);
     }
 
-const sessionsWithCategory = sessions.map((s) => {
-  const convo = messageMap.get(s.session_id) || [];
-  const firstUserMessage = getFirstUserMessage(convo);
+    const sessionsWithCategory = sessions.map((s) => {
+      const convo = messageMap.get(s.session_id) || [];
+      const firstUserMessage = getFirstUserMessage(convo);
 
-  return {
-    ...s,
-    category: getSessionCategory(convo),
-    first_user_message: firstUserMessage,
-    first_user_preview: shortenText(firstUserMessage, 100)
-  };
-});
+      return {
+        ...s,
+        category: getSessionCategory(convo),
+        first_user_message: firstUserMessage,
+        first_user_preview: shortenText(firstUserMessage, 100),
+        auth_label: getAuthLabel(s),
+        user_display: getUserDisplay(s)
+      };
+    });
 
     const recentSessions = [...sessionsWithCategory]
       .sort((a, b) => String(b.last_active_at || "").localeCompare(String(a.last_active_at || "")))
       .slice(0, 20);
 
-    const expensiveSessions = [...sessionsWithCategory]
-      .sort((a, b) => Number(b.estimated_cost_usd || 0) - Number(a.estimated_cost_usd || 0))
-      .slice(0, 10);
-
-    const longestSessions = [...sessionsWithCategory]
-      .sort((a, b) => Number(b.message_count || 0) - Number(a.message_count || 0))
-      .slice(0, 10);
-
-
     const topCategories = countByCategory(sessionsWithCategory, (s) => s.category).slice(0, 10);
-
-    const engagedCategories = countByCategory(
-      sessionsWithCategory.filter((s) => Number(s.message_count || 0) >= 5),
-      (s) => s.category
-    ).slice(0, 10);
-
-    const expensiveCategories = countByCategory(
-      [...sessionsWithCategory]
-        .sort((a, b) => Number(b.estimated_cost_usd || 0) - Number(a.estimated_cost_usd || 0))
-        .slice(0, 20),
-      (s) => s.category
-    ).slice(0, 10);
 
     const body = `
       <h1>Xfrend Admin Dashboard</h1>
@@ -543,6 +551,8 @@ const sessionsWithCategory = sessions.map((s) => {
       <div class="cards">
         <div class="card"><div>Sessions today</div><div class="big">${sessionsToday.length}</div></div>
         <div class="card"><div>Total sessions</div><div class="big">${totals.sessions}</div></div>
+        <div class="card"><div>Signed-up users</div><div class="big">${users.length}</div></div>
+        <div class="card"><div>Users joined today</div><div class="big">${usersToday.length}</div></div>
         <div class="card"><div>Total messages</div><div class="big">${totals.messages}</div></div>
         <div class="card"><div>Total tokens</div><div class="big">${totals.total_tokens}</div></div>
         <div class="card"><div>Input tokens</div><div class="big">${totals.input_tokens}</div></div>
@@ -559,90 +569,30 @@ const sessionsWithCategory = sessions.map((s) => {
       <h2>Recent sessions</h2>
       <table>
         <thead>
-<tr>
-  <th>First question</th>
-  <th>Category</th>
-<th class="col-small">Test</th>
-  <th>Last active</th>
-  <th>Messages</th>
-  <th>Tokens</th>
-  <th>Cost USD</th>
-  <th>Device</th>
-</tr>
+          <tr>
+            <th>Question</th>
+            <th>Auth</th>
+            <th>Name / Session</th>
+            <th>Msgs</th>
+            <th>Time (PH)</th>
+            <th>Device</th>
+          </tr>
         </thead>
         <tbody>
-${recentSessions.map((s) => `
-  <tr>
-    <td class="preview">
-      <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
-    </td>
-    <td>${escapeHtml(s.category || "other")}</td>
-    <td>${s.is_test ? "Yes" : ""}</td>
-    <td>${escapeHtml(s.last_active_at || "")}</td>
-    <td>${Number(s.message_count || 0)}</td>
-    <td>${Number(s.total_tokens || 0)}</td>
-    <td>${Number(s.estimated_cost_usd || 0).toFixed(6)}</td>
-    <td>${escapeHtml(s.device_type || "")}</td>
-  </tr>
-`).join("")}
+          ${recentSessions.map((s) => `
+            <tr>
+              <td class="preview">
+                <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
+              </td>
+              <td>${escapeHtml(s.auth_label || "Guest")}</td>
+              <td>${escapeHtml(s.user_display || "—")}</td>
+              <td>${Number(s.message_count || 0)}</td>
+              <td>${escapeHtml(formatPH(s.last_active_at || ""))}</td>
+              <td>${escapeHtml(s.device_type || "")}</td>
+            </tr>
+          `).join("")}
         </tbody>
       </table>
-
-      <div class="section">
-        <h2>Longest sessions</h2>
-        <table>
-          <thead>
-<tr>
-  <th>First question</th>
-  <th>Category</th>
-  <th>Messages</th>
-  <th>Tokens</th>
-  <th>Cost USD</th>
-</tr>
-          </thead>
-          <tbody>
-${longestSessions.map((s) => `
-  <tr>
-    <td class="preview">
-      <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
-    </td>
-    <td>${escapeHtml(s.category || "other")}</td>
-    <td>${Number(s.message_count || 0)}</td>
-    <td>${Number(s.total_tokens || 0)}</td>
-    <td>${Number(s.estimated_cost_usd || 0).toFixed(6)}</td>
-  </tr>
-`).join("")}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <h2>Most expensive sessions</h2>
-        <table>
-          <thead>
-<tr>
-  <th>First question</th>
-  <th>Category</th>
-  <th>Cost USD</th>
-  <th>Tokens</th>
-  <th>Messages</th>
-</tr>
-          </thead>
-          <tbody>
-${expensiveSessions.map((s) => `
-  <tr>
-    <td class="preview">
-      <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
-    </td>
-    <td>${escapeHtml(s.category || "other")}</td>
-    <td>${Number(s.estimated_cost_usd || 0).toFixed(6)}</td>
-    <td>${Number(s.total_tokens || 0)}</td>
-    <td>${Number(s.message_count || 0)}</td>
-  </tr>
-`).join("")}
-          </tbody>
-        </table>
-      </div>
 
       <div class="section">
         <h2>Top repeated user prompts</h2>
@@ -743,55 +693,15 @@ ${expensiveSessions.map((s) => `
           </tbody>
         </table>
       </div>
-
-      <div class="section">
-        <h2>Top categories among engaged sessions (5+ msgs)</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th>Sessions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${engagedCategories.map((c) => `
-              <tr>
-                <td>${escapeHtml(c.category)}</td>
-                <td>${c.count}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <h2>Top categories among expensive sessions</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th>Sessions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${expensiveCategories.map((c) => `
-              <tr>
-                <td>${escapeHtml(c.category)}</td>
-                <td>${c.count}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>
     `;
 
     res.send(pageTemplate("Xfrend Admin", body));
   });
 
   app.get("/admin/sessions", requireAdmin, (req, res) => {
-const allSessions = readJson(SESSIONS_FILE, []);
-const includeTest = String(req.query.include_test || "0") === "1";
-const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_test);
+    const allSessions = readJson(SESSIONS_FILE, []);
+    const includeTest = String(req.query.include_test || "0") === "1";
+    const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_test);
 
     const messages = readMessages();
 
@@ -816,10 +726,11 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
         searchable_text: searchableText,
         category: getSessionCategory(convo),
         first_user_message: getFirstUserMessage(convo),
-        first_user_preview: shortenText(getFirstUserMessage(convo), 110)
+        first_user_preview: shortenText(getFirstUserMessage(convo), 110),
+        auth_label: getAuthLabel(s),
+        user_display: getUserDisplay(s)
       };
     });
-
 
     if (minMessages > 0) {
       rows = rows.filter((s) => Number(s.message_count || 0) >= minMessages);
@@ -832,9 +743,7 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
       );
     }
 
-    if (sort === "cost") {
-      rows.sort((a, b) => Number(b.estimated_cost_usd || 0) - Number(a.estimated_cost_usd || 0));
-    } else if (sort === "messages") {
+    if (sort === "messages") {
       rows.sort((a, b) => Number(b.message_count || 0) - Number(a.message_count || 0));
     } else {
       rows.sort((a, b) => String(b.last_active_at || "").localeCompare(String(a.last_active_at || "")));
@@ -857,7 +766,6 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
           <select name="sort">
             <option value="latest" ${sort === "latest" ? "selected" : ""}>Latest</option>
             <option value="messages" ${sort === "messages" ? "selected" : ""}>Most messages</option>
-            <option value="cost" ${sort === "cost" ? "selected" : ""}>Highest cost</option>
           </select>
         </div>
         <div style="align-self:end;">
@@ -865,29 +773,25 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
         </div>
       </form>
 
-<div class="muted" style="margin-bottom:10px;">
-<a href="/admin/sessions">Hide test sessions</a> |
-<a href="/admin/sessions?include_test=1">Show test sessions</a>
-</div>
+      <div class="muted" style="margin-bottom:10px;">
+        <a href="/admin/sessions">Hide test sessions</a> |
+        <a href="/admin/sessions?include_test=1">Show test sessions</a>
+      </div>
 
-
-<div class="muted" style="margin-bottom:10px;">
-  Showing ${rows.length} session(s)
-  ${includeTest ? " · including test sessions" : " · excluding test sessions"}
-</div>
+      <div class="muted" style="margin-bottom:10px;">
+        Showing ${rows.length} session(s)
+        ${includeTest ? " · including test sessions" : " · excluding test sessions"}
+      </div>
 
       <table>
         <thead>
           <tr>
-            <th>First question</th>
-            <th class="col-small">Category</th>
-	    <th class="col-small">Test</th>
-            <th class="col-small">Msgs</th>
-            <th class="col-small">Tokens</th>
-            <th class="col-small">Cost USD</th>
-            <th class="col-medium">Last active</th>
-            <th class="col-device">Device</th>
-            <th class="col-session">Session ID</th>
+            <th>Question</th>
+            <th>Auth</th>
+            <th>Name / Session</th>
+            <th>Msgs</th>
+            <th>Time (PH)</th>
+            <th>Device</th>
           </tr>
         </thead>
         <tbody>
@@ -896,14 +800,11 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
               <td class="preview">
                 <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
               </td>
-              <td>${escapeHtml(s.category || "other")}</td>
-	      <td>${s.is_test ? "Yes" : ""}</td>
+              <td>${escapeHtml(s.auth_label || "Guest")}</td>
+              <td>${escapeHtml(s.user_display || "—")}</td>
               <td>${Number(s.message_count || 0)}</td>
-              <td>${Number(s.total_tokens || 0)}</td>
-              <td>${Number(s.estimated_cost_usd || 0).toFixed(6)}</td>
-              <td>${escapeHtml(s.last_active_at || "")}</td>
+              <td>${escapeHtml(formatPH(s.last_active_at || ""))}</td>
               <td>${escapeHtml(s.device_type || "")}</td>
-              <td class="mono col-session">${escapeHtml(s.session_id)}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -929,36 +830,26 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
       <h1>Session detail</h1>
 
       <div class="card" style="margin-bottom:20px;">
-        <div><strong>Session ID:</strong> <span class="mono">${escapeHtml(session.session_id)}</span></div>
-        <div><strong>Test session:</strong> ${session.is_test ? "Yes" : "No"}</div>
-        <div>
-          ${session.is_test
-            ? `<a href="/admin/sessions/${encodeURIComponent(session.session_id)}/toggle-test?value=0">Unmark as test</a>`
-            : `<a href="/admin/sessions/${encodeURIComponent(session.session_id)}/toggle-test?value=1">Mark as test</a>`}
-        </div>
+        <div><strong>${session.logged_in ? "Name" : "Session"}:</strong> ${escapeHtml(getUserDisplay(session))}</div>
+        <div><strong>Auth:</strong> ${escapeHtml(getAuthLabel(session))}</div>
+        <div><strong>Email:</strong> ${escapeHtml(session.user_email || "—")}</div>
         <div><strong>Detected category:</strong> ${escapeHtml(getSessionCategory(convo))}</div>
         <div><strong>First user message:</strong> ${escapeHtml(getFirstUserMessage(convo) || "(none)")}</div>
-        <div><strong>Created:</strong> ${escapeHtml(session.created_at || "")}</div>
-        <div><strong>Last active:</strong> ${escapeHtml(session.last_active_at || "")}</div>
         <div><strong>Messages:</strong> ${Number(session.message_count || 0)}</div>
-        <div><strong>Input tokens:</strong> ${Number(session.input_tokens || 0)}</div>
-        <div><strong>Output tokens:</strong> ${Number(session.output_tokens || 0)}</div>
-        <div><strong>Total tokens:</strong> ${Number(session.total_tokens || 0)}</div>
-        <div><strong>Estimated cost USD:</strong> ${Number(session.estimated_cost_usd || 0).toFixed(6)}</div>
+        <div><strong>Total cost USD:</strong> ${Number(session.estimated_cost_usd || 0).toFixed(6)}</div>
         <div><strong>Device:</strong> ${escapeHtml(session.device_type || "")}</div>
         <div><strong>User agent:</strong> ${escapeHtml(session.user_agent || "")}</div>
         <div><strong>IP hash:</strong> <span class="mono">${escapeHtml(session.ip_hash || "")}</span></div>
+        <div><strong>Created (PH):</strong> ${escapeHtml(formatPH(session.created_at || ""))}</div>
       </div>
 
-      <h2>Conversation</h2>
+      <h2>Messages</h2>
       <div class="chat">
         ${convo.map((m) => `
           <div class="msg ${escapeHtml(m.role || "")}">
             <div class="meta">
               <strong>${escapeHtml(m.role || "")}</strong> ·
-              ${escapeHtml(m.created_at || "")} ·
-              tokens: ${Number(m.total_tokens || 0)} ·
-              cost: ${Number(m.estimated_cost_usd || 0).toFixed(6)}
+              ${escapeHtml(formatPH(m.created_at || ""))}
             </div>
             <div class="content">${escapeHtml(m.content || "")}</div>
           </div>
@@ -967,5 +858,250 @@ const sessions = includeTest ? allSessions : allSessions.filter((s) => !s.is_tes
     `;
 
     res.send(pageTemplate(`Session ${sessionId}`, body));
+  });
+
+
+  function buildAdminConvoRows() {
+    const conversations = readConversations();
+    const users = readUsers();
+    const sessions = readJson(SESSIONS_FILE, []);
+    const messages = readMessages();
+
+    const userMap = new Map(users.map((u) => [u.user_id, u]));
+    const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
+
+    const grouped = new Map();
+
+for (const c of conversations) {
+  const conversationId = String(c.conversation_id || "").trim();
+  if (!conversationId) continue;
+
+  const key = `convo:${conversationId}`;
+
+  grouped.set(key, {
+    admin_convo_id: key,
+    conversation_id: conversationId,
+    conversation: c,
+    messages: []
+  });
+}
+
+    for (const m of messages) {
+      const conversationId = String(m.conversation_id || "").trim();
+      const sessionId = String(m.session_id || "").trim();
+
+      const key = conversationId
+        ? `convo:${conversationId}`
+        : sessionId
+          ? `session:${sessionId}`
+          : "";
+
+      if (!key) continue;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          admin_convo_id: key,
+          conversation_id: conversationId || "",
+          conversation: null,
+          messages: []
+        });
+      }
+
+      grouped.get(key).messages.push(m);
+    }
+
+    return [...grouped.values()].map((item) => {
+      const msgs = item.messages.sort((a, b) =>
+        String(a.created_at || "").localeCompare(String(b.created_at || ""))
+      );
+
+      const firstMsg = msgs[0] || null;
+      const lastMsg = msgs[msgs.length - 1] || null;
+      const firstUserMsg = msgs.find((m) => m.role === "user") || null;
+      const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user") || null;
+
+      const sessionId =
+        firstMsg?.session_id ||
+        item.conversation?.session_id ||
+        "";
+
+      const session = sessionMap.get(sessionId) || null;
+      const user = item.conversation?.user_id ? userMap.get(item.conversation.user_id) : null;
+
+      const loggedIn = Boolean(user || session?.logged_in);
+
+      const title =
+        item.conversation?.title ||
+        shortenText(firstUserMsg?.content || "Guest chat", 80);
+
+      const characterId =
+        item.conversation?.character_id ||
+        firstMsg?.character_id ||
+        lastMsg?.character_id ||
+        "general";
+
+      return {
+        admin_convo_id: item.admin_convo_id,
+        conversation_id: item.conversation_id,
+        session_id: sessionId,
+        title,
+        character_label: getCharacterLabel(characterId),
+        auth_label: loggedIn ? "Member" : "Guest",
+        name: user?.name || session?.user_name || (loggedIn ? "Member" : "Guest"),
+        email: user?.email || session?.user_email || "—",
+        device: session?.device_type || "—",
+        created_at: item.conversation?.created_at || firstMsg?.created_at || session?.created_at || "",
+        updated_at: item.conversation?.updated_at || lastMsg?.created_at || session?.last_active_at || "",
+        message_count: msgs.length,
+        first_user_preview: shortenText(firstUserMsg?.content || "", 100),
+        last_user_preview: shortenText(lastUserMsg?.content || "", 100)
+      };
+    }).sort((a, b) =>
+      String(b.updated_at || "").localeCompare(String(a.updated_at || ""))
+    );
+  }
+
+  app.get("/admin/convos", requireAdmin, (req, res) => {
+    const rows = buildAdminConvoRows();
+
+    const body = `
+      <h1>Convos</h1>
+
+      <div class="muted" style="margin-bottom:10px;">
+        Showing ${rows.length} convo(s), including guests and members, newest updated first
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Title / Last user message</th>
+            <th>Auth</th>
+            <th>Character</th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Device</th>
+            <th>Updated (PH)</th>
+            <th>Msgs</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td class="preview">
+                <a href="/admin/convos/${encodeURIComponent(r.admin_convo_id)}">${escapeHtml(r.title || "Chat")}</a>
+                <div class="muted">${escapeHtml(r.last_user_preview || r.first_user_preview || "")}</div>
+              </td>
+              <td>${escapeHtml(r.auth_label)}</td>
+              <td>${escapeHtml(r.character_label)}</td>
+              <td>${escapeHtml(r.name)}</td>
+              <td>${escapeHtml(r.email)}</td>
+              <td>${escapeHtml(r.device)}</td>
+              <td>${escapeHtml(formatPH(r.updated_at || ""))}</td>
+              <td>${Number(r.message_count || 0)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+
+    res.send(pageTemplate("Convos", body));
+  });
+
+  app.get("/admin/convos/:adminConvoId", requireAdmin, (req, res) => {
+    const adminConvoId = String(req.params.adminConvoId || "").trim();
+
+    const rows = buildAdminConvoRows();
+    const row = rows.find((r) => r.admin_convo_id === adminConvoId);
+
+    const messages = readMessages();
+
+    if (!row) {
+      return res.status(404).send(pageTemplate("Not found", `<h1>Convo not found</h1>`));
+    }
+
+    let convoMessages = [];
+
+    if (adminConvoId.startsWith("convo:")) {
+      const realConvoId = adminConvoId.slice("convo:".length);
+      convoMessages = messages.filter((m) => m.conversation_id === realConvoId);
+    } else if (adminConvoId.startsWith("session:")) {
+      const realSessionId = adminConvoId.slice("session:".length);
+      convoMessages = messages.filter((m) =>
+        String(m.session_id || "") === realSessionId &&
+        !String(m.conversation_id || "").trim()
+      );
+    }
+
+    convoMessages.sort((a, b) =>
+      String(a.created_at || "").localeCompare(String(b.created_at || ""))
+    );
+
+    const body = `
+      <h1>Convo detail</h1>
+
+      <div class="card" style="margin-bottom:20px;">
+        <div><strong>Title:</strong> ${escapeHtml(row.title || "Chat")}</div>
+        <div><strong>Auth:</strong> ${escapeHtml(row.auth_label)}</div>
+        <div><strong>Character:</strong> ${escapeHtml(row.character_label)}</div>
+        <div><strong>Name:</strong> ${escapeHtml(row.name || "—")}</div>
+        <div><strong>Email:</strong> ${escapeHtml(row.email || "—")}</div>
+        <div><strong>Device:</strong> ${escapeHtml(row.device || "—")}</div>
+        <div><strong>Session ID:</strong> <span class="mono">${escapeHtml(row.session_id || "—")}</span></div>
+        <div><strong>Conversation ID:</strong> <span class="mono">${escapeHtml(row.conversation_id || "—")}</span></div>
+        <div><strong>Created (PH):</strong> ${escapeHtml(formatPH(row.created_at || ""))}</div>
+        <div><strong>Updated (PH):</strong> ${escapeHtml(formatPH(row.updated_at || ""))}</div>
+        <div><strong>Messages:</strong> ${convoMessages.length}</div>
+      </div>
+
+      <h2>Messages</h2>
+      <div class="chat">
+        ${convoMessages.map((m) => `
+          <div class="msg ${escapeHtml(m.role || "")}">
+            <div class="meta">
+              <strong>${escapeHtml(m.role || "")}</strong> ·
+              ${escapeHtml(formatPH(m.created_at || ""))}
+            </div>
+            <div class="content">${escapeHtml(m.content || "")}</div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+
+    res.send(pageTemplate(`Convo ${adminConvoId}`, body));
+  });
+
+  app.get("/admin/users", requireAdmin, (req, res) => {
+    const users = readUsers()
+      .slice()
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+
+    const body = `
+      <h1>Users</h1>
+
+      <div class="muted" style="margin-bottom:10px;">
+        Showing ${users.length} signed-up user(s), newest first
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Joined (PH)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map((u) => `
+            <tr>
+              <td>${escapeHtml(u.name || "")}</td>
+              <td>${escapeHtml(u.email || "")}</td>
+              <td>${escapeHtml(formatPH(u.created_at || ""))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+
+    res.send(pageTemplate("Users", body));
   });
 };

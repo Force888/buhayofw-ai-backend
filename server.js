@@ -7,6 +7,7 @@ const cookieParser = require("cookie-parser");
 const dotenv = require("dotenv");
 const OpenAI = require("openai");
 const registerAdminRoutes = require("./admin-routes");
+const { CHARACTER_CONFIG } = require("./character-config");
 const { loadMemory, saveMemory, mergeMemory } = require("./memory-store");
 const { buildInputMessages } = require("./prompt-builder");
 const { extractMemoryUpdates } = require("./memory-extractor");
@@ -24,6 +25,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 const MESSAGES_FILE = path.join(DATA_DIR, "messages.jsonl");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
+const PENDING_NEWS_FILE = path.join(DATA_DIR, "pending_news.json");
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -38,6 +40,7 @@ function ensureJsonFile(filePath, defaultValue) {
 ensureJsonFile(SESSIONS_FILE, []);
 ensureJsonFile(USERS_FILE, []);
 ensureJsonFile(CONVERSATIONS_FILE, []);
+ensureJsonFile(PENDING_NEWS_FILE, []);
 
 function readJson(filePath, fallback) {
   try {
@@ -199,11 +202,11 @@ function buildTimeContext({
     lines.push("- No prior chat time context is available.");
   }
 
-lines.push("Use this context naturally, but do not ignore it.");
-lines.push("If the user sends a short greeting like 'hi', 'hello', or similar, especially after a time gap, you should usually respond with an appropriate greeting based on time of day.");
-lines.push("For example: good morning, good afternoon, good evening, or natural Tagalog equivalents like 'kumusta ngayong umaga/gabi'.");
-lines.push("If there was a noticeable gap (more than 24 hours or days), you may gently acknowledge it (e.g., 'matagal-tagal na rin since last usap natin').");
-lines.push("Do not force time references in every reply, but prioritize them in greetings and re-openings of conversation.");
+  lines.push("Use this context naturally, but do not ignore it.");
+  lines.push("If the user sends a short greeting like 'hi', 'hello', or similar, especially after a time gap, you should usually respond with an appropriate greeting based on time of day.");
+  lines.push("For example: good morning, good afternoon, good evening, or natural Tagalog equivalents like 'kumusta ngayong umaga/gabi'.");
+  lines.push("If there was a noticeable gap (more than 24 hours or days), you may gently acknowledge it (e.g., 'matagal-tagal na rin since last usap natin').");
+  lines.push("Do not force time references in every reply, but prioritize them in greetings and re-openings of conversation.");
 
   return lines.join("\n");
 }
@@ -319,9 +322,6 @@ function touchConversation(conversationId, maybeTitle = "") {
   writeConversations(conversations);
   return next;
 }
-
-
-
 
 function listConversationMessages(conversationId) {
   const lines = fs.existsSync(MESSAGES_FILE)
@@ -531,6 +531,86 @@ function buildMajorNewsWelcome(newsData) {
   ]);
 }
 
+function getPendingNewsKey({ userId, deviceId }) {
+  if (userId) return `user:${userId}`;
+  return `device:${deviceId || "no_device"}`;
+}
+
+function savePendingNewsContext({ userId, deviceId, headline, welcomeText }) {
+  if (!headline) return;
+
+  const items = readJson(PENDING_NEWS_FILE, []);
+  const key = getPendingNewsKey({ userId, deviceId });
+  const now = Date.now();
+
+  const freshItems = items.filter((item) => {
+    return item && item.key !== key && Number(item.expires_at_ms || 0) > now;
+  });
+
+  freshItems.push({
+    key,
+    headline: String(headline || "").trim(),
+    welcome_text: String(welcomeText || "").trim(),
+    created_at: nowIso(),
+    expires_at_ms: now + (70 * 1000)
+  });
+
+  writeJson(PENDING_NEWS_FILE, freshItems);
+}
+
+function getPendingNewsContext({ userId, deviceId }) {
+  const items = readJson(PENDING_NEWS_FILE, []);
+  const key = getPendingNewsKey({ userId, deviceId });
+  const now = Date.now();
+
+  const freshItems = items.filter((item) => {
+    return item && Number(item.expires_at_ms || 0) > now;
+  });
+
+  if (freshItems.length !== items.length) {
+    writeJson(PENDING_NEWS_FILE, freshItems);
+  }
+
+  return freshItems.find((item) => item.key === key) || null;
+}
+
+function clearPendingNewsContext({ userId, deviceId }) {
+  const items = readJson(PENDING_NEWS_FILE, []);
+  const key = getPendingNewsKey({ userId, deviceId });
+
+  writeJson(
+    PENDING_NEWS_FILE,
+    items.filter((item) => item && item.key !== key)
+  );
+}
+
+function isVagueNewsFollowup(text = "") {
+  const t = String(text || "").trim().toLowerCase();
+
+  const patterns = [
+    "gusto ko malaman",
+    "gusto kong malaman",
+    "sige",
+    "ano yun",
+    "ano",
+    "ano yon",
+    "ano yun?",
+    "tell me",
+    "yes",
+    "oo",
+    "okay",
+    "ok",
+    "sure",
+    "go",
+    "sabihin mo",
+    "ano news",
+    "ha",
+    "ano balita"
+  ];
+
+   return patterns.some((p) => t === p);
+}
+
 function getAuthUserId(req) {
   const cookieUserId = req.cookies && req.cookies.xf_user_id;
   if (cookieUserId && typeof cookieUserId === "string" && cookieUserId.length >= 8) {
@@ -625,7 +705,7 @@ const guestBurstLimiter = rateLimit({
 
 const guestDailyLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000,
-  max: 15,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: getAnonKey,
@@ -653,7 +733,7 @@ const userBurstLimiter = rateLimit({
 
 const userDailyLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000,
-  max: 30,
+  max: 40,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => getAuthUserId(req) || getAnonKey(req),
@@ -735,9 +815,41 @@ function incrementSessionUsage(sessionId, fields) {
   writeJson(SESSIONS_FILE, sessions);
 }
 
+function updateSessionMeta(sessionId, fields = {}) {
+  const sessions = readJson(SESSIONS_FILE, []);
+  const idx = sessions.findIndex((s) => s.session_id === sessionId);
+  if (idx === -1) return;
+
+  const current = sessions[idx];
+
+  sessions[idx] = {
+    ...current,
+    ...fields,
+    last_active_at: nowIso()
+  };
+
+  writeJson(SESSIONS_FILE, sessions);
+}
+
+
+function shouldPromptSignupNow(session, isLoggedIn, promptAt = 8, cooldownHours = 24) {
+  if (isLoggedIn) return false;
+  if (!session) return false;
+
+  const messageCount = Number(session.message_count || 0);
+  if (messageCount < promptAt) return false;
+
+  const lastPromptAt = session.last_signup_prompt_at;
+  if (!lastPromptAt) return true;
+
+  const elapsedMs = Date.now() - new Date(lastPromptAt).getTime();
+  const cooldownMs = cooldownHours * 60 * 60 * 1000;
+
+  return elapsedMs >= cooldownMs;
+}
+
+
 function estimateCostUsd(inputTokens, outputTokens) {
-  // Temporary estimate placeholders for rough internal tracking only.
-  // Adjust later if you want exact model pricing logic.
   const inputCostPer1M = 0.40;
   const outputCostPer1M = 1.60;
 
@@ -753,49 +865,48 @@ app.post("/ask", async (req, res) => {
   const sessionId = getSessionId(req);
   setSessionCookie(res, sessionId);
 
-const authUserId = getAuthUserId(req);
-const authUser = authUserId ? findUserById(authUserId) : null;
-const isLoggedIn = !!authUser;
+  const authUserId = getAuthUserId(req);
+  const authUser = authUserId ? findUserById(authUserId) : null;
+  const isLoggedIn = !!authUser;
 
-const applyLimiter = (limiter) =>
-  new Promise((resolve, reject) => {
-    let finished = false;
+  const applyLimiter = (limiter) =>
+    new Promise((resolve, reject) => {
+      let finished = false;
 
-    const done = (err) => {
-      if (finished) return;
-      finished = true;
-      if (err) reject(err);
-      else resolve();
-    };
+      const done = (err) => {
+        if (finished) return;
+        finished = true;
+        if (err) reject(err);
+        else resolve();
+      };
 
-    limiter(req, res, done);
+      limiter(req, res, done);
 
-    setImmediate(() => {
-      if (res.headersSent) done();
+      setImmediate(() => {
+        if (res.headersSent) done();
+      });
     });
-  });
 
-try {
-  if (isLoggedIn) {
-    await applyLimiter(userBurstLimiter);
-    if (res.headersSent) return;
-    await applyLimiter(userDailyLimiter);
-    if (res.headersSent) return;
-  } else {
-    await applyLimiter(guestBurstLimiter);
-    if (res.headersSent) return;
-    await applyLimiter(guestDailyLimiter);
-    if (res.headersSent) return;
-  }
+  try {
+    if (isLoggedIn) {
+      await applyLimiter(userBurstLimiter);
+      if (res.headersSent) return;
+      await applyLimiter(userDailyLimiter);
+      if (res.headersSent) return;
+    } else {
+      await applyLimiter(guestBurstLimiter);
+      if (res.headersSent) return;
+      await applyLimiter(guestDailyLimiter);
+      if (res.headersSent) return;
+    }
 
-const { question, history, conversation_id, character_id } = req.body || {};
+    const { question, history, conversation_id, character_id } = req.body || {};
 
     if (!question || typeof question !== "string" || !question.trim()) {
       return res.status(400).json({ error: "Missing question" });
     }
 
     const trimmedQuestion = question.trim();
-
     const lowerQ = trimmedQuestion.toLowerCase();
 
     const isNewsQuery =
@@ -813,12 +924,12 @@ const { question, history, conversation_id, character_id } = req.body || {};
       lowerQ.includes("ano nangyayari") ||
       lowerQ.includes("ano balita ngayon");
 
-if (trimmedQuestion.length > 500) {
-  return res.status(400).json({
-    error: "QUESTION_TOO_LONG",
-    message: "Please keep your message shorter."
-  });
-}
+    if (trimmedQuestion.length > 500) {
+      return res.status(400).json({
+        error: "QUESTION_TOO_LONG",
+        message: "Please keep your message shorter."
+      });
+    }
 
     const deviceId = getDeviceId(req);
     const clientIp = getClientIp(req);
@@ -826,10 +937,10 @@ if (trimmedQuestion.length > 500) {
     const userAgent = req.get("user-agent") || "";
     const deviceType = getDeviceType(userAgent);
 
-const selectedCharacter =
-  typeof character_id === "string" && character_id.trim()
-    ? character_id.trim()
-    : "general";
+    const selectedCharacter =
+      typeof character_id === "string" && character_id.trim()
+        ? character_id.trim()
+        : "general";
 
     if (!getSession(sessionId)) {
       upsertSession({
@@ -846,26 +957,38 @@ const selectedCharacter =
         total_tokens: 0,
         estimated_cost_usd: 0,
         is_rate_limited: false,
-        is_blocked: false
+        is_blocked: false,
+        logged_in: isLoggedIn,
+        user_id: isLoggedIn ? authUser.user_id : null,
+        user_name: isLoggedIn ? authUser.name : null,
+        user_email: isLoggedIn ? authUser.email : null,
+        last_character_id: selectedCharacter,
+        last_conversation_id: null
       });
     }
 
-const session = getSession(sessionId);
+    const session = getSession(sessionId);
 
-// Guest flow only
-const SIGNUP_PROMPT_AT = 8;    // about 4 user sends
-const SIGNUP_REQUIRED_AT = 20; // about 10 user sends
+const SIGNUP_PROMPT_AT = 16;
+const SIGNUP_PROMPT_COOLDOWN_HOURS = 24;
 
-if (!isLoggedIn && session && session.message_count >= SIGNUP_REQUIRED_AT) {
-  return res.status(403).json({
-    error: "SIGNUP_REQUIRED",
-    message: "Create a free account to continue and save your chats.",
-    signup_required: true
-  });
-}
+// TEMPORARILY DISABLED SIGNUP WALL
+// const SIGNUP_REQUIRED_AT = 20;
+// if (!isLoggedIn && session && session.message_count >= SIGNUP_REQUIRED_AT) {
+//   return res.status(403).json({
+//     error: "SIGNUP_REQUIRED",
+//     message: "Create a free account to save your chats, continue anytime, and enjoy higher daily limits.",
+//     signup_required: true
+//   });
+// }
 
-const shouldShowSignupPrompt =
-  !isLoggedIn && !!(session && session.message_count >= SIGNUP_PROMPT_AT);
+const shouldShowSignupPrompt = shouldPromptSignupNow(
+  session,
+  isLoggedIn,
+  SIGNUP_PROMPT_AT,
+  SIGNUP_PROMPT_COOLDOWN_HOURS
+);
+
 
     let activeConversationId = null;
 
@@ -887,15 +1010,30 @@ const shouldShowSignupPrompt =
           });
         }
       } else {
-const createdConversation = createConversation(
-  authUser.user_id,
-  question,
-  selectedCharacter
-);
+        const createdConversation = createConversation(
+          authUser.user_id,
+          question,
+          selectedCharacter
+        );
 
         activeConversationId = createdConversation.conversation_id;
       }
     }
+
+    updateSessionMeta(sessionId, {
+      logged_in: isLoggedIn,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      user_name: isLoggedIn ? authUser.name : null,
+      user_email: isLoggedIn ? authUser.email : null,
+      last_character_id: selectedCharacter,
+      last_conversation_id: activeConversationId || null
+    });
+
+if (shouldShowSignupPrompt) {
+  updateSessionMeta(sessionId, {
+    last_signup_prompt_at: nowIso()
+  });
+}
 
     const memoryOwner = {
       userId: isLoggedIn ? authUser.user_id : null,
@@ -904,16 +1042,16 @@ const createdConversation = createConversation(
 
     const currentMemory = loadMemory(memoryOwner);
 
-if (isLoggedIn && authUser && authUser.name) {
-  const currentName = String(currentMemory.profile?.name || "").trim();
+    if (isLoggedIn && authUser && authUser.name) {
+      const currentName = String(currentMemory.profile?.name || "").trim();
 
-  if (!currentName) {
-    currentMemory.profile = {
-      ...currentMemory.profile,
-      name: authUser.name
-    };
-  }
-}
+      if (!currentName) {
+        currentMemory.profile = {
+          ...currentMemory.profile,
+          name: authUser.name
+        };
+      }
+    }
 
     const { inputMessages } = buildInputMessages({
       selectedCharacter,
@@ -933,32 +1071,58 @@ if (isLoggedIn && authUser && authUser.name) {
       content: timeContextText
     });
 
-if (isNewsQuery) {
-  const newsData = await getNews();
+const pendingNewsContext = getPendingNewsContext({
+  userId: isLoggedIn ? authUser.user_id : null,
+  deviceId
+});
 
-  if (newsData) {
-    const formatted = `
+const isPendingNewsFollowup =
+  !isNewsQuery &&
+  pendingNewsContext &&
+  isVagueNewsFollowup(trimmedQuestion);
+
+if (isNewsQuery || isPendingNewsFollowup) {
+
+      const newsData = await getNews();
+
+      if (newsData) {
+        if (isPendingNewsFollowup && pendingNewsContext?.headline) {
+          inputMessages.splice(2, 0, {
+            role: "system",
+            content:
+              "The user is replying to the welcome-news teaser shown on the chat entry card. They want to know about this specific news item: " +
+              pendingNewsContext.headline +
+              "\nAnswer directly. Do not ask what news they mean."
+          });
+
+          clearPendingNewsContext({
+            userId: isLoggedIn ? authUser.user_id : null,
+            deviceId
+          });
+        }
+
+        const formatted = `
 Latest world news:
-${newsData.world.map(n => "- " + n.title).join("\n")}
+${newsData.world.map((n) => "- " + n.title).join("\n")}
 
 Latest Philippines news:
-${newsData.philippines.map(n => "- " + n.title).join("\n")}
+${newsData.philippines.map((n) => "- " + n.title).join("\n")}
 `;
 
-    inputMessages.splice(2, 0, {
-      role: "system",
-      content:
-  	"The user is asking for current news. Give a direct, informative answer using the headlines below. Do NOT ask follow-up questions first. Do NOT generalize. Summarize the key news clearly.\n\n" +
-  formatted
-    });
-  } else {
-    inputMessages.splice(2, 0, {
-      role: "system",
-      content:
-        "User is asking about current news, but live data is unavailable. Be honest and say you cannot check live news right now."
-    });
-  }
-}
+        inputMessages.splice(2, 0, {
+          role: "system",
+          content:
+            "The user is asking for current news. Give a direct, informative answer using the headlines below. Do NOT ask follow-up questions first. Do NOT generalize. Summarize the key news clearly.\n\n" +
+            formatted
+        });
+      } else {
+        inputMessages.splice(2, 0, {
+          role: "system",
+          content:
+            "User is asking about current news, but live data is unavailable. Be honest and say you cannot check live news right now."
+        });
+      }
+    }
 
     const completion = await client.responses.create({
       model: "gpt-4.1-mini",
@@ -999,32 +1163,32 @@ ${newsData.philippines.map(n => "- " + n.title).join("\n")}
     const nextMemory = mergeMemory(currentMemory, memoryUpdates);
     saveMemory(memoryOwner, nextMemory);
 
-appendJsonLine(MESSAGES_FILE, {
-  session_id: sessionId,
-  conversation_id: activeConversationId,
-  user_id: isLoggedIn ? authUser.user_id : null,
-  role: "user",
-  content: trimmedQuestion,
-  input_tokens: 0,
-  output_tokens: 0,
-  total_tokens: 0,
-  estimated_cost_usd: 0,
-  created_at: nowIso()
-});
+    appendJsonLine(MESSAGES_FILE, {
+      session_id: sessionId,
+      conversation_id: activeConversationId,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      role: "user",
+      content: trimmedQuestion,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      estimated_cost_usd: 0,
+      created_at: nowIso()
+    });
 
-appendJsonLine(MESSAGES_FILE, {
-  session_id: sessionId,
-  conversation_id: activeConversationId,
-  user_id: isLoggedIn ? authUser.user_id : null,
-  role: "assistant",
-  content: cleaned,
-  input_tokens: inputTokens,
-  output_tokens: outputTokens,
-  total_tokens: totalTokens,
-  estimated_cost_usd: estimatedCostUsd,
-  latency_ms: Date.now() - startedAt,
-  created_at: nowIso()
-});
+    appendJsonLine(MESSAGES_FILE, {
+      session_id: sessionId,
+      conversation_id: activeConversationId,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      role: "assistant",
+      content: cleaned,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
+      estimated_cost_usd: estimatedCostUsd,
+      latency_ms: Date.now() - startedAt,
+      created_at: nowIso()
+    });
 
     incrementSessionUsage(sessionId, {
       message_count: 2,
@@ -1034,19 +1198,19 @@ appendJsonLine(MESSAGES_FILE, {
       estimated_cost_usd: estimatedCostUsd
     });
 
-return res.json({
-  answer: cleaned,
-  signup_prompt: shouldShowSignupPrompt,
-  conversation_id: activeConversationId,
-  character_id: selectedCharacter,
-  meta: {
-    session_id: sessionId,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    total_tokens: totalTokens,
-    estimated_cost_usd: estimatedCostUsd
-  }
-});
+    return res.json({
+      answer: cleaned,
+      signup_prompt: shouldShowSignupPrompt,
+      conversation_id: activeConversationId,
+      character_id: selectedCharacter,
+      meta: {
+        session_id: sessionId,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: totalTokens,
+        estimated_cost_usd: estimatedCostUsd
+      }
+    });
 
   } catch (err) {
     console.error("AI error:", err?.message || err);
@@ -1158,13 +1322,13 @@ app.get("/conversations", (req, res) => {
       return res.status(401).json({ error: "NOT_LOGGED_IN", message: "Please log in first." });
     }
 
-const conversations = listUserConversations(user.user_id).map((c) => ({
-  conversation_id: c.conversation_id,
-  title: c.title || "New chat",
-  character_id: c.character_id || "general",
-  created_at: c.created_at,
-  updated_at: c.updated_at
-}));
+    const conversations = listUserConversations(user.user_id).map((c) => ({
+      conversation_id: c.conversation_id,
+      title: c.title || "New chat",
+      character_id: c.character_id || "general",
+      created_at: c.created_at,
+      updated_at: c.updated_at
+    }));
 
     return res.json({
       ok: true,
@@ -1207,14 +1371,13 @@ app.get("/conversation/:id", (req, res) => {
 
     return res.json({
       ok: true,
-conversation: {
-  conversation_id: conversation.conversation_id,
-  title: conversation.title || "New chat",
-  character_id: conversation.character_id || "general",
-  created_at: conversation.created_at,
-  updated_at: conversation.updated_at
-},
-
+      conversation: {
+        conversation_id: conversation.conversation_id,
+        title: conversation.title || "New chat",
+        character_id: conversation.character_id || "general",
+        created_at: conversation.created_at,
+        updated_at: conversation.updated_at
+      },
       messages
     });
   } catch (err) {
@@ -1272,36 +1435,38 @@ app.get("/welcome", async (req, res) => {
 
     let text = "";
 
-    // 1) absent < 12h → no welcome
     if (absentHours < 12) {
       text = "";
-    }
-    // 2) absent >= 72h → always long-time-no-see
-    else if (absentHours >= 72) {
+    } else if (absentHours >= 72) {
       text = buildLongTimeNoSeeGreeting(name);
-    }
+    } else {
+      let majorNewsText = "";
 
-// 3) absent >= 12h and < 72h → major news wins if present
-else {
-  let majorNewsText = "";
-
-  try {
-    const newsData = await getNews();
-    majorNewsText = buildMajorNewsWelcome(newsData);
-  } catch (err) {
-    console.error("Welcome news check failed:", err);
-  }
+try {
+  const newsData = await getNews();
+  const majorHeadline = detectMajorNewsHeadline(newsData);
+  majorNewsText = majorHeadline ? buildMajorNewsWelcome(newsData) : "";
 
   if (majorNewsText) {
-    text = majorNewsText;
-  } else if (absentHours >= 24) {
-    // 4) absent >= 24h and no major news → time greeting fallback
-    text = buildTimeGreetingFallback({ dayPart, name });
-  } else {
-    // 5) otherwise → no welcome
-    text = "";
+    savePendingNewsContext({
+      userId: isLoggedIn ? authUser.user_id : null,
+      deviceId,
+      headline: majorHeadline,
+      welcomeText: majorNewsText
+    });
   }
+} catch (err) {
+  console.error("Welcome news check failed:", err);
 }
+
+      if (majorNewsText) {
+        text = majorNewsText;
+      } else if (absentHours >= 24) {
+        text = buildTimeGreetingFallback({ dayPart, name });
+      } else {
+        text = "";
+      }
+    }
 
     return res.json({
       ok: true,
@@ -1364,7 +1529,10 @@ app.get("/admin/stats", (req, res) => {
 registerAdminRoutes(app, {
   SESSIONS_FILE,
   MESSAGES_FILE,
-  readJson
+  USERS_FILE,
+  CONVERSATIONS_FILE,
+  readJson,
+  CHARACTER_CONFIG
 });
 
 const port = process.env.PORT || 3000;
