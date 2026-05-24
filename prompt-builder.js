@@ -36,10 +36,16 @@ function buildSystemInstruction({ selectedCharacter, memory }) {
   return `
 ${BASE_SYSTEM_PROMPT}
 
-CRITICAL:
-Keep replies under 3 sentences.
-Do not over-explain.
-Do not end with a question unless needed.
+
+CRITICAL RESPONSE STYLE:
+- Keep replies concise by default, but do not sacrifice useful explanation.
+- Prefer 1 to 4 short paragraphs or bullets, depending on the question.
+- Prioritize clarity, mechanisms, concepts, tradeoffs, and first principles.
+- Remove fluff, filler empathy, motivational language, fake profundity, and vague life-coach statements.
+- Do not sound like an AI influencer, corporate assistant, therapist manual, or motivational speaker.
+- Do not over-explain.
+- Do not end with a question unless it genuinely helps.
+
 
 ${character.prompt}
 

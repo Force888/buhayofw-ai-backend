@@ -12,13 +12,84 @@ const { loadMemory, saveMemory, mergeMemory } = require("./memory-store");
 const { buildInputMessages } = require("./prompt-builder");
 const { extractMemoryUpdates } = require("./memory-extractor");
 const { getNews } = require("./news-fetcher");
+const multer = require("multer");
+const sharp = require("sharp");
+const { Resend } = require("resend");
+
 
 dotenv.config();
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const app = express();
 app.set("trust proxy", 1);
 app.use(cookieParser());
 app.use(express.json());
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+
+    const allowed = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif"
+];
+
+    if (!allowed.includes(file.mimetype)) {
+	return cb(new Error("Only JPEG, PNG, WebP, HEIC, or HEIF images are allowed."));
+    }
+    cb(null, true);
+  }
+});
+
+
+function handleAskUpload(req, res, next) {
+  upload.single("image")(req, res, (err) => {
+    if (!err) return next();
+
+    console.error("Upload error:", err);
+
+    return res.status(400).json({
+      error: "IMAGE_UPLOAD_FAILED",
+      message: err?.message || "Image upload failed."
+    });
+  });
+}
+
+
+async function prepareImageForOpenAI(file) {
+  if (!file || !file.buffer) return null;
+
+
+  const output = await sharp(file.buffer)
+
+    .rotate()
+    .resize({
+      width: 1100,
+      height: 1100,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .jpeg({
+      quality: 68,
+      mozjpeg: true
+    })
+    .toBuffer();
+
+
+  return {
+    mimeType: "image/jpeg",
+    base64: output.toString("base64"),
+    bytes: output.length
+  };
+}
+
 
 const DATA_DIR = path.join(__dirname, "data");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
@@ -104,6 +175,15 @@ function getManilaHour24(dateInput = new Date()) {
   }).format(new Date(dateInput));
 
   return Number(hourStr);
+}
+
+function getManilaDateKey(dateInput = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date(dateInput));
 }
 
 function getManilaDayPart(dateInput = new Date()) {
@@ -231,6 +311,19 @@ function makePasswordRecord(password) {
 function verifyPassword(password, salt, expectedHash) {
   return hashPassword(password, salt) === expectedHash;
 }
+
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function hashResetToken(token) {
+  return crypto
+    .createHash("sha256")
+    .update(String(token || ""))
+    .digest("hex");
+}
+
 
 function readUsers() {
   return readJson(USERS_FILE, []);
@@ -831,6 +924,45 @@ function updateSessionMeta(sessionId, fields = {}) {
   writeJson(SESSIONS_FILE, sessions);
 }
 
+function countImageUploadsToday({ userId, deviceId }) {
+  const sessions = readJson(SESSIONS_FILE, []);
+  const today = getManilaDateKey();
+
+  return sessions.reduce((total, s) => {
+    const sameOwner = userId
+      ? s.user_id === userId
+      : s.device_id === deviceId;
+
+    if (!sameOwner) return total;
+    if (s.last_image_upload_date !== today) return total;
+
+    return total + Number(s.image_upload_count_today || 0);
+  }, 0);
+}
+
+function incrementImageUploadUsage(sessionId) {
+  const sessions = readJson(SESSIONS_FILE, []);
+  const idx = sessions.findIndex((s) => s.session_id === sessionId);
+  if (idx === -1) return;
+
+  const today = getManilaDateKey();
+  const current = sessions[idx];
+
+  const currentCount =
+    current.last_image_upload_date === today
+      ? Number(current.image_upload_count_today || 0)
+      : 0;
+
+  sessions[idx] = {
+    ...current,
+    last_image_upload_date: today,
+    image_upload_count_today: currentCount + 1,
+    last_active_at: nowIso()
+  };
+
+  writeJson(SESSIONS_FILE, sessions);
+}
+
 
 function shouldPromptSignupNow(session, isLoggedIn, promptAt = 8, cooldownHours = 24) {
   if (isLoggedIn) return false;
@@ -860,7 +992,63 @@ function estimateCostUsd(inputTokens, outputTokens) {
   return Number(cost.toFixed(8));
 }
 
-app.post("/ask", async (req, res) => {
+app.post("/track-visit", (req, res) => {
+  try {
+    const visitsPath = path.join(DATA_DIR, "visits.json");
+
+    let visits = [];
+
+    try {
+      visits = JSON.parse(
+        fs.readFileSync(visitsPath, "utf8")
+      );
+    } catch (_) {}
+
+    const incoming = req.body;
+
+    let existing = visits.find(
+      (v) => v.visit_id === incoming.visit_id
+    );
+
+    if (existing) {
+      existing.last_activity = incoming.last_activity;
+
+      if (incoming.asked_ai) {
+        existing.asked_ai = true;
+      }
+    } else {
+      visits.unshift({
+        visit_id: incoming.visit_id,
+
+        device_id: incoming.device_id,
+
+        started_at: incoming.started_at,
+
+        last_activity: incoming.last_activity,
+
+        platform: incoming.platform,
+
+        asked_ai: !!incoming.asked_ai
+      });
+    }
+
+    fs.writeFileSync(
+      visitsPath,
+      JSON.stringify(visits, null, 2)
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      error: "track visit failed"
+    });
+  }
+});
+
+
+app.post("/ask", handleAskUpload, async (req, res) => {
   const startedAt = Date.now();
   const sessionId = getSessionId(req);
   setSessionCookie(res, sessionId);
@@ -900,7 +1088,21 @@ app.post("/ask", async (req, res) => {
       if (res.headersSent) return;
     }
 
-    const { question, history, conversation_id, character_id } = req.body || {};
+let {
+  question,
+  history = [],
+  conversation_id,
+  character_id
+} = req.body || {};
+
+if (typeof history === "string") {
+  try {
+    history = JSON.parse(history);
+  } catch {
+    history = [];
+  }
+}
+
 
     if (!question || typeof question !== "string" || !question.trim()) {
       return res.status(400).json({ error: "Missing question" });
@@ -941,6 +1143,55 @@ app.post("/ask", async (req, res) => {
       typeof character_id === "string" && character_id.trim()
         ? character_id.trim()
         : "general";
+
+let preparedImage = null;
+
+if (req.file) {
+const allowedImageCharacters = new Set([
+  "einx",
+  "magdalena",
+  "jose",
+  "alexander",
+  "moses",
+  "wux",
+  "sunx",
+  "pinkx",
+  "jax",
+  "lebox",
+  "general"
+]);
+
+
+  if (!isLoggedIn) {
+    return res.status(403).json({
+      error: "IMAGE_LOGIN_REQUIRED",
+      message: "Please log in to upload images."
+    });
+  }
+
+  if (!allowedImageCharacters.has(selectedCharacter)) {
+    return res.status(400).json({
+      error: "IMAGE_NOT_ALLOWED_FOR_CHARACTER",
+      message: "Image upload is not available for this character."
+    });
+  }
+
+  const uploadsToday = countImageUploadsToday({
+    userId: authUser.user_id,
+    deviceId
+  });
+
+  if (uploadsToday >= 100) {
+    return res.status(429).json({
+      error: "IMAGE_DAILY_LIMIT",
+      message: "Daily image upload limit reached."
+    });
+  }
+
+  preparedImage = await prepareImageForOpenAI(req.file);
+  incrementImageUploadUsage(sessionId);
+}
+
 
     if (!getSession(sessionId)) {
       upsertSession({
@@ -992,33 +1243,53 @@ const shouldShowSignupPrompt = shouldPromptSignupNow(
 
     let activeConversationId = null;
 
-    if (isLoggedIn) {
-      const requestedConversationId =
-        typeof conversation_id === "string" && conversation_id.trim()
-          ? conversation_id.trim()
-          : null;
 
-      if (requestedConversationId) {
-        const existingConversation = findConversationById(requestedConversationId);
-        if (existingConversation && existingConversation.user_id === authUser.user_id) {
-          activeConversationId = existingConversation.conversation_id;
-          touchConversation(activeConversationId, question);
-        } else {
-          return res.status(403).json({
-            error: "INVALID_CONVERSATION",
-            message: "That conversation is not available."
-          });
-        }
-      } else {
-        const createdConversation = createConversation(
-          authUser.user_id,
-          question,
-          selectedCharacter
-        );
+const requestedConversationId =
+  typeof conversation_id === "string" && conversation_id.trim()
+    ? conversation_id.trim()
+    : null;
 
-        activeConversationId = createdConversation.conversation_id;
-      }
-    }
+if (requestedConversationId) {
+  const existingConversation =
+    findConversationById(requestedConversationId);
+
+  if (
+    existingConversation &&
+    (
+      (isLoggedIn &&
+        existingConversation.user_id === authUser.user_id)
+
+      ||
+
+      (!isLoggedIn &&
+        !existingConversation.user_id)
+    )
+  ) {
+    activeConversationId =
+      existingConversation.conversation_id;
+
+    touchConversation(activeConversationId, question);
+
+  } else {
+    return res.status(403).json({
+      error: "INVALID_CONVERSATION",
+      message: "That conversation is not available."
+    });
+  }
+
+} else {
+
+  const createdConversation = createConversation(
+    isLoggedIn ? authUser.user_id : null,
+    question,
+    selectedCharacter
+  );
+
+  activeConversationId =
+    createdConversation.conversation_id;
+}
+
+
 
     updateSessionMeta(sessionId, {
       logged_in: isLoggedIn,
@@ -1059,6 +1330,29 @@ if (shouldShowSignupPrompt) {
       history,
       trimmedQuestion
     });
+
+if (preparedImage) {
+  const lastUserIndex = [...inputMessages]
+    .reverse()
+    .findIndex((m) => m.role === "user");
+
+  if (lastUserIndex !== -1) {
+    const realIndex = inputMessages.length - 1 - lastUserIndex;
+    const originalText = String(inputMessages[realIndex].content || "");
+
+    inputMessages[realIndex] = {
+      role: "user",
+      content: [
+        { type: "input_text", text: originalText },
+        {
+          type: "input_image",
+          image_url: `data:${preparedImage.mimeType};base64,${preparedImage.base64}`
+        }
+      ]
+    };
+  }
+}
+
 
     const timeContextText = buildTimeContext({
       isLoggedIn,
@@ -1167,6 +1461,7 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
       session_id: sessionId,
       conversation_id: activeConversationId,
       user_id: isLoggedIn ? authUser.user_id : null,
+      character_id: selectedCharacter,
       role: "user",
       content: trimmedQuestion,
       input_tokens: 0,
@@ -1180,6 +1475,7 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
       session_id: sessionId,
       conversation_id: activeConversationId,
       user_id: isLoggedIn ? authUser.user_id : null,
+      character_id: selectedCharacter,
       role: "assistant",
       content: cleaned,
       input_tokens: inputTokens,
@@ -1213,8 +1509,16 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
     });
 
   } catch (err) {
-    console.error("AI error:", err?.message || err);
-    return res.status(500).json({ error: "AI request failed" });
+
+console.error("AI error:", err);
+
+return res.status(500).json({
+  error: "AI_REQUEST_FAILED",
+  message: err?.message || String(err) || "May problema sa system. Pakisubukan ulit."
+});
+
+
+
   }
 });
 
@@ -1303,6 +1607,153 @@ app.post("/login", (req, res) => {
     return res.status(500).json({ error: "LOGIN_FAILED", message: "Login failed." });
   }
 });
+
+
+app.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body || {};
+
+    const cleanEmail = String(email || "")
+      .trim()
+      .toLowerCase();
+
+    if (!cleanEmail) {
+      return res.status(400).json({
+        error: "MISSING_EMAIL"
+      });
+    }
+
+    const users = readUsers();
+
+    const user = users.find(
+      (u) => String(u.email || "").toLowerCase() === cleanEmail
+    );
+
+    // Always return success to prevent email enumeration
+    if (!user) {
+      return res.json({
+        success: true
+      });
+    }
+
+    const token = generateResetToken();
+    const tokenHash = hashResetToken(token);
+
+    user.reset_token_hash = tokenHash;
+    user.reset_token_expires = Date.now() + (1000 * 60 * 30);
+
+    writeUsers(users);
+
+    const resetLink =
+      `${process.env.APP_BASE_URL}/reset-password.html?token=${token}`;
+
+   const resendResult = await resend.emails.send({
+      from: process.env.EMAIL_FROM,
+      to: cleanEmail,
+      subject: "Reset your Xfrend password",
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height:1.6;">
+          <h2>Reset your Xfrend password</h2>
+
+          <p>Click the button below to reset your password.</p>
+
+          <p>
+            <a href="${resetLink}"
+               style="
+                 display:inline-block;
+                 background:#111;
+                 color:#fff;
+                 padding:12px 18px;
+                 text-decoration:none;
+                 border-radius:8px;
+               ">
+              Reset Password
+            </a>
+          </p>
+
+          <p>This link expires in 30 minutes.</p>
+
+          <p>If you did not request this, you can ignore this email.</p>
+        </div>
+      `
+    });
+
+console.log("RESEND RESULT:", resendResult);
+
+    return res.json({
+      success: true
+    });
+
+  } catch (err) {
+    console.error("FORGOT PASSWORD ERROR:", err);
+
+    return res.status(500).json({
+      error: "SERVER_ERROR"
+    });
+  }
+});
+
+
+app.post("/reset-password", (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+
+    const cleanToken = String(token || "").trim();
+    const cleanPassword = String(password || "");
+
+    if (!cleanToken || !cleanPassword) {
+      return res.status(400).json({
+        error: "MISSING_FIELDS",
+        message: "Reset token and new password are required."
+      });
+    }
+
+    if (cleanPassword.length < 6) {
+      return res.status(400).json({
+        error: "INVALID_PASSWORD",
+        message: "Password must be at least 6 characters."
+      });
+    }
+
+    const tokenHash = hashResetToken(cleanToken);
+    const users = readUsers();
+
+    const user = users.find((u) =>
+      u.reset_token_hash === tokenHash &&
+      Number(u.reset_token_expires || 0) > Date.now()
+    );
+
+    if (!user) {
+      return res.status(400).json({
+        error: "INVALID_OR_EXPIRED_TOKEN",
+        message: "This reset link is invalid or expired."
+      });
+    }
+
+    const pw = makePasswordRecord(cleanPassword);
+
+    user.password_salt = pw.salt;
+    user.password_hash = pw.hash;
+    user.reset_token_hash = null;
+    user.reset_token_expires = null;
+    user.updated_at = nowIso();
+
+    writeUsers(users);
+
+    return res.json({
+      success: true
+    });
+
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Password reset failed."
+    });
+  }
+});
+
 
 app.post("/logout", (req, res) => {
   clearAuthCookies(res);
@@ -1491,7 +1942,7 @@ app.get("/admin/stats", (req, res) => {
     const totals = sessions.reduce(
       (acc, s) => {
         acc.sessions += 1;
-        acc.messages += Number(s.message_count || 0);
+	acc.messages += Number(s.message_count || 0) / 2;
         acc.input_tokens += Number(s.input_tokens || 0);
         acc.output_tokens += Number(s.output_tokens || 0);
         acc.total_tokens += Number(s.total_tokens || 0);

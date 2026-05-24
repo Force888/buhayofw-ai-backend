@@ -74,6 +74,39 @@ module.exports = function registerAdminRoutes(app, options) {
     }
   }
 
+
+function readVisits() {
+  const visitsFile = SESSIONS_FILE.replace(/sessions\.json$/, "visits.json");
+
+  try {
+    if (!fs.existsSync(visitsFile)) return [];
+    const raw = fs.readFileSync(visitsFile, "utf8").trim();
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (_) {
+    return [];
+  }
+}
+
+function formatVisitDuration(startedAt, lastActivity) {
+  const start = Number(startedAt || 0);
+  const end = Number(lastActivity || 0);
+
+  if (!start || !end || end < start) return "—";
+
+  const mins = Math.max(0, Math.round((end - start) / 60000));
+
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+
+  return rem ? `${hours}h ${rem}m` : `${hours}h`;
+}
+
+
+
   function escapeHtml(value) {
     return String(value || "")
       .replace(/&/g, "&amp;")
@@ -87,6 +120,60 @@ module.exports = function registerAdminRoutes(app, options) {
     const id = String(characterId || "general").trim() || "general";
     return CHARACTER_CONFIG?.[id]?.label || id;
   }
+
+function getReadableUserAgent(userAgent = "") {
+  const ua = String(userAgent || "");
+
+  const lower = ua.toLowerCase();
+
+  const isIOS =
+    /iphone|ipad|ipod/.test(lower);
+
+  const isAndroid =
+    /android/.test(lower);
+
+  const isWindows =
+    /windows/.test(lower);
+
+  const isMac =
+    /macintosh|mac os/.test(lower) && !isIOS;
+
+  const isXfrendIOS =
+    /xfrendiosapp/.test(lower);
+
+  const isXfrendAndroid =
+    /xfrendandroidapp/.test(lower);
+
+  let platform = "Unknown";
+
+  if (isIOS) platform = "iPhone";
+  else if (isAndroid) platform = "Android";
+  else if (isWindows) platform = "Windows";
+  else if (isMac) platform = "Mac";
+
+  let browser = "Browser";
+
+  if (/chrome/.test(lower) && !/edg/.test(lower)) {
+    browser = "Chrome";
+  } else if (/safari/.test(lower) && !/chrome/.test(lower)) {
+    browser = "Safari";
+  } else if (/firefox/.test(lower)) {
+    browser = "Firefox";
+  } else if (/edg/.test(lower)) {
+    browser = "Edge";
+  }
+
+  if (isXfrendIOS) {
+    return `${platform} • Xfrend iOS App`;
+  }
+
+  if (isXfrendAndroid) {
+    return `${platform} • Xfrend Android App`;
+  }
+
+  return `${platform} • ${browser} • Website`;
+}
+
 
   function getAuthLabel(session) {
     return session?.logged_in ? "Member" : "Guest";
@@ -237,7 +324,10 @@ module.exports = function registerAdminRoutes(app, options) {
     <a href="/admin/sessions">Sessions</a>
     <a href="/admin/convos">Convos</a>
     <a href="/admin/users">Users</a>
+    <a href="/admin/visitors">Visitors</a>
     <a href="/admin/stats">Raw stats JSON</a>
+
+
   </div>
   ${body}
 </body>
@@ -329,6 +419,14 @@ module.exports = function registerAdminRoutes(app, options) {
     const firstUser = messagesForSession.find((m) => m.role === "user");
     return String(firstUser?.content || "").trim();
   }
+
+function getLastUserMessage(messagesForSession) {
+  const lastUser = [...messagesForSession]
+    .reverse()
+    .find((m) => m.role === "user");
+
+  return String(lastUser?.content || "").trim();
+}
 
   function shortenText(text, maxLen = 100) {
     const s = String(text || "").trim().replace(/\s+/g, " ");
@@ -459,6 +557,89 @@ module.exports = function registerAdminRoutes(app, options) {
     return res.redirect(`/admin/sessions/${encodeURIComponent(sessionId)}`);
   });
 
+app.get("/admin/visitors", requireAdmin, (req, res) => {
+  const visits = readVisits();
+  const sessions = readJson(SESSIONS_FILE, []);
+
+  const sessionByDevice = new Map();
+
+  for (const s of sessions) {
+    if (!s.device_id) continue;
+
+    const existing = sessionByDevice.get(s.device_id);
+
+    if (
+      !existing ||
+      String(s.last_active_at || s.created_at || "").localeCompare(
+        String(existing.last_active_at || existing.created_at || "")
+      ) > 0
+    ) {
+      sessionByDevice.set(s.device_id, s);
+    }
+  }
+
+  const rows = visits
+    .map((v) => {
+      const session = sessionByDevice.get(v.device_id) || null;
+
+      const userLabel = session
+        ? getUserDisplay(session)
+        : "Guest";
+
+      return {
+        started_at: v.started_at,
+        last_activity: v.last_activity,
+        user: userLabel,
+        platform: v.platform || "Unknown",
+        duration: formatVisitDuration(v.started_at, v.last_activity),
+        status: v.asked_ai ? "Asked AI" : "Browsed only"
+      };
+    })
+    .sort((a, b) => Number(b.started_at || 0) - Number(a.started_at || 0))
+    .slice(0, 200);
+
+  const browsedOnly = rows.filter((r) => r.status === "Browsed only").length;
+  const askedAi = rows.filter((r) => r.status === "Asked AI").length;
+
+  const body = `
+    <h1>Visitors</h1>
+
+    <div class="cards">
+      <div class="card"><div>Total visits shown</div><div class="big">${rows.length}</div></div>
+      <div class="card"><div>Browsed only</div><div class="big">${browsedOnly}</div></div>
+      <div class="card"><div>Asked AI</div><div class="big">${askedAi}</div></div>
+    </div>
+
+    <div class="section">
+      <table>
+        <thead>
+          <tr>
+            <th>Time (PH)</th>
+            <th>User</th>
+            <th>Platform</th>
+            <th>Duration</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td>${escapeHtml(formatPH(r.started_at))}</td>
+              <td>${escapeHtml(r.user)}</td>
+              <td>${escapeHtml(r.platform)}</td>
+              <td>${escapeHtml(r.duration)}</td>
+              <td>${escapeHtml(r.status)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  res.send(pageTemplate("Visitors", body));
+});
+
+
   app.get("/admin", requireAdmin, (req, res) => {
     const allSessions = readJson(SESSIONS_FILE, []);
     const includeTest = String(req.query.include_test || "0") === "1";
@@ -483,7 +664,7 @@ module.exports = function registerAdminRoutes(app, options) {
     const totals = sessions.reduce(
       (acc, s) => {
         acc.sessions += 1;
-        acc.messages += Number(s.message_count || 0);
+	acc.messages += Number(s.message_count || 0) / 2;
         acc.input_tokens += Number(s.input_tokens || 0);
         acc.output_tokens += Number(s.output_tokens || 0);
         acc.total_tokens += Number(s.total_tokens || 0);
@@ -532,8 +713,11 @@ module.exports = function registerAdminRoutes(app, options) {
       return {
         ...s,
         category: getSessionCategory(convo),
-        first_user_message: firstUserMessage,
-        first_user_preview: shortenText(firstUserMessage, 100),
+
+first_user_message: firstUserMessage,
+latest_user_message: getLastUserMessage(convo),
+latest_user_preview: shortenText(getLastUserMessage(convo), 100),
+
         auth_label: getAuthLabel(s),
         user_display: getUserDisplay(s)
       };
@@ -570,46 +754,30 @@ module.exports = function registerAdminRoutes(app, options) {
       <table>
         <thead>
           <tr>
-            <th>Question</th>
+            <th>Latest question</th>
             <th>Auth</th>
             <th>Name / Session</th>
-            <th>Msgs</th>
+            <th>Messages</th>
             <th>Time (PH)</th>
             <th>Device</th>
           </tr>
         </thead>
         <tbody>
-          ${recentSessions.map((s) => `
-            <tr>
-              <td class="preview">
-                <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
-              </td>
-              <td>${escapeHtml(s.auth_label || "Guest")}</td>
-              <td>${escapeHtml(s.user_display || "—")}</td>
-              <td>${Number(s.message_count || 0)}</td>
-              <td>${escapeHtml(formatPH(s.last_active_at || ""))}</td>
-              <td>${escapeHtml(s.device_type || "")}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
 
-      <div class="section">
-        <h2>Top repeated user prompts</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Count</th>
-              <th>Prompt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${topPrompts.map((p) => `
-              <tr>
-                <td>${p.count}</td>
-                <td>${escapeHtml(p.sample)}</td>
-              </tr>
-            `).join("")}
+
+${recentSessions.map((s) => `
+  <tr>
+    <td class="preview">
+      <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.latest_user_preview || "(no user message)")}</a>
+    </td>
+    <td>${escapeHtml(s.auth_label || "Guest")}</td>
+    <td>${escapeHtml(s.user_display || "—")}</td>
+    <td>${Number(s.message_count || 0) / 2}</td>
+    <td>${escapeHtml(formatPH(s.last_active_at || ""))}</td>
+    <td>${escapeHtml(s.device_type || "")}</td>
+  </tr>
+`).join("")}
+
           </tbody>
         </table>
       </div>
@@ -705,6 +873,8 @@ module.exports = function registerAdminRoutes(app, options) {
 
     const messages = readMessages();
 
+    const allConvoRows = buildAdminConvoRows();
+
     const q = String(req.query.q || "").trim().toLowerCase();
     const minMessages = Number(req.query.min_messages || 0);
     const sort = String(req.query.sort || "latest");
@@ -721,8 +891,22 @@ module.exports = function registerAdminRoutes(app, options) {
       const convo = messageMap.get(s.session_id) || [];
       const searchableText = convo.map((m) => String(m.content || "")).join("\n").toLowerCase();
 
+const userMessageCount =
+  convo.filter((m) => m.role === "user").length;
+
+const assistantMessageCount =
+  convo.filter((m) => m.role === "assistant").length;
+
+const convoCount =
+  allConvoRows.filter((r) => r.session_id === s.session_id).length;
+
       return {
         ...s,
+
+user_message_count: userMessageCount,
+assistant_message_count: assistantMessageCount,
+convo_count: convoCount,
+
         searchable_text: searchableText,
         category: getSessionCategory(convo),
         first_user_message: getFirstUserMessage(convo),
@@ -786,23 +970,36 @@ module.exports = function registerAdminRoutes(app, options) {
       <table>
         <thead>
           <tr>
-            <th>Question</th>
-            <th>Auth</th>
-            <th>Name / Session</th>
-            <th>Msgs</th>
-            <th>Time (PH)</th>
-            <th>Device</th>
+<th>Name / Session</th>
+<th>Auth</th>
+<th>Messages</th>
+<th>AI replies</th>
+<th>Convos</th>
+<th>Cost</th>
+<th>Time (PH)</th>
+<th>Device</th>
+
           </tr>
         </thead>
         <tbody>
           ${rows.map((s) => `
             <tr>
-              <td class="preview">
-                <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">${escapeHtml(s.first_user_preview || "(no user message)")}</a>
-              </td>
-              <td>${escapeHtml(s.auth_label || "Guest")}</td>
-              <td>${escapeHtml(s.user_display || "—")}</td>
-              <td>${Number(s.message_count || 0)}</td>
+<td>
+  <a href="/admin/sessions/${encodeURIComponent(s.session_id)}">
+    ${escapeHtml(s.user_display || "—")}
+  </a>
+</td>
+
+<td>${escapeHtml(s.auth_label || "Guest")}</td>
+
+<td>${s.user_message_count}</td>
+
+<td>${s.assistant_message_count}</td>
+
+<td>${s.convo_count}</td>
+
+<td>$${Number(s.estimated_cost_usd || 0).toFixed(4)}</td>
+
               <td>${escapeHtml(formatPH(s.last_active_at || ""))}</td>
               <td>${escapeHtml(s.device_type || "")}</td>
             </tr>
@@ -819,8 +1016,31 @@ module.exports = function registerAdminRoutes(app, options) {
     const sessions = readJson(SESSIONS_FILE, []);
     const messages = readMessages();
 
-    const session = sessions.find((s) => s.session_id === sessionId);
-    const convo = messages.filter((m) => m.session_id === sessionId);
+const session = sessions.find((s) => s.session_id === sessionId);
+
+const sessionMessages = messages.filter(
+  (m) => m.session_id === sessionId
+);
+
+const userMessageCount =
+  sessionMessages.filter((m) => m.role === "user").length;
+
+const assistantMessageCount =
+  sessionMessages.filter((m) => m.role === "assistant").length;
+
+const convoRows = buildAdminConvoRows()
+  .filter((r) => r.session_id === sessionId);
+
+const page = Math.max(1, Number(req.query.page || 1));
+const perPage = 30;
+
+const sortedSessionMessages = [...sessionMessages].sort((a, b) =>
+  String(b.created_at || "").localeCompare(String(a.created_at || ""))
+);
+
+const totalPages = Math.max(1, Math.ceil(sortedSessionMessages.length / perPage));
+const pageMessages = sortedSessionMessages.slice((page - 1) * perPage, page * perPage);
+
 
     if (!session) {
       return res.status(404).send(pageTemplate("Not found", `<h1>Session not found</h1>`));
@@ -833,28 +1053,89 @@ module.exports = function registerAdminRoutes(app, options) {
         <div><strong>${session.logged_in ? "Name" : "Session"}:</strong> ${escapeHtml(getUserDisplay(session))}</div>
         <div><strong>Auth:</strong> ${escapeHtml(getAuthLabel(session))}</div>
         <div><strong>Email:</strong> ${escapeHtml(session.user_email || "—")}</div>
-        <div><strong>Detected category:</strong> ${escapeHtml(getSessionCategory(convo))}</div>
-        <div><strong>First user message:</strong> ${escapeHtml(getFirstUserMessage(convo) || "(none)")}</div>
-        <div><strong>Messages:</strong> ${Number(session.message_count || 0)}</div>
+
+<div><strong>Messages:</strong> ${userMessageCount}</div>
+
+<div><strong>Assistant messages:</strong> ${assistantMessageCount}</div>
+
+<div><strong>Total rows:</strong> ${sessionMessages.length}</div>
+
+<div><strong>Total tokens:</strong> ${Number(session.total_tokens || 0)}</div>
+
+
         <div><strong>Total cost USD:</strong> ${Number(session.estimated_cost_usd || 0).toFixed(6)}</div>
         <div><strong>Device:</strong> ${escapeHtml(session.device_type || "")}</div>
-        <div><strong>User agent:</strong> ${escapeHtml(session.user_agent || "")}</div>
+
+	<div><strong>User agent:</strong> ${escapeHtml(getReadableUserAgent(session.user_agent || ""))}</div>
+
         <div><strong>IP hash:</strong> <span class="mono">${escapeHtml(session.ip_hash || "")}</span></div>
         <div><strong>Created (PH):</strong> ${escapeHtml(formatPH(session.created_at || ""))}</div>
       </div>
 
-      <h2>Messages</h2>
-      <div class="chat">
-        ${convo.map((m) => `
-          <div class="msg ${escapeHtml(m.role || "")}">
-            <div class="meta">
-              <strong>${escapeHtml(m.role || "")}</strong> ·
-              ${escapeHtml(formatPH(m.created_at || ""))}
-            </div>
-            <div class="content">${escapeHtml(m.content || "")}</div>
-          </div>
-        `).join("")}
+<h2>Conversations in this session</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Character</th>
+      <th>Messages</th>
+      <th>Updated (PH)</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    ${convoRows.map((r) => `
+      <tr>
+        <td class="preview">
+          <a href="/admin/convos/${encodeURIComponent(r.admin_convo_id)}">
+            ${escapeHtml(r.title || "Chat")}
+          </a>
+        </td>
+
+        <td>${escapeHtml(r.character_label)}</td>
+
+        <td>${Number(r.message_count || 0)}</td>
+
+        <td>${escapeHtml(formatPH(r.updated_at || ""))}</td>
+      </tr>
+    `).join("")}
+  </tbody>
+</table>
+
+<h2 style="margin-top:24px;">Messages in this session</h2>
+
+<div class="muted" style="margin-bottom:10px;">
+  Showing newest first · Page ${page} of ${totalPages}
+</div>
+
+
+<div style="margin:12px 0 16px;">
+  ${page > 1 ? `<a href="/admin/sessions/${encodeURIComponent(sessionId)}?page=${page - 1}">← Newer messages</a>` : ""}
+  ${page > 1 && page < totalPages ? " | " : ""}
+  ${page < totalPages ? `<a href="/admin/sessions/${encodeURIComponent(sessionId)}?page=${page + 1}">Older messages →</a>` : ""}
+</div>
+
+
+<div class="chat">
+  ${pageMessages.map((m) => `
+    <div class="msg ${escapeHtml(m.role || "")}">
+      <div class="meta">
+        ${escapeHtml(m.role || "")}
+        · ${escapeHtml(formatPH(m.created_at || ""))}
+        · ${escapeHtml(getCharacterLabel(m.character_id || ""))}
       </div>
+      <div class="content">${escapeHtml(m.content || "")}</div>
+    </div>
+  `).join("")}
+</div>
+
+<div style="margin-top:16px;">
+  ${page > 1 ? `<a href="/admin/sessions/${encodeURIComponent(sessionId)}?page=${page - 1}">← Newer messages</a>` : ""}
+  ${page > 1 && page < totalPages ? " | " : ""}
+  ${page < totalPages ? `<a href="/admin/sessions/${encodeURIComponent(sessionId)}?page=${page + 1}">Older messages →</a>` : ""}
+</div>
+
     `;
 
     res.send(pageTemplate(`Session ${sessionId}`, body));
@@ -949,10 +1230,15 @@ for (const c of conversations) {
         auth_label: loggedIn ? "Member" : "Guest",
         name: user?.name || session?.user_name || (loggedIn ? "Member" : "Guest"),
         email: user?.email || session?.user_email || "—",
-        device: session?.device_type || "—",
+
+	device: session?.device_type || "—",
+	platform: getReadableUserAgent(session?.user_agent || ""),
+	device_id: session?.device_id || "—",
+
         created_at: item.conversation?.created_at || firstMsg?.created_at || session?.created_at || "",
         updated_at: item.conversation?.updated_at || lastMsg?.created_at || session?.last_active_at || "",
-        message_count: msgs.length,
+	message_count:
+	  msgs.filter((m) => m.role === "user").length,
         first_user_preview: shortenText(firstUserMsg?.content || "", 100),
         last_user_preview: shortenText(lastUserMsg?.content || "", 100)
       };
@@ -981,7 +1267,7 @@ for (const c of conversations) {
             <th>Email</th>
             <th>Device</th>
             <th>Updated (PH)</th>
-            <th>Msgs</th>
+            <th>Messages</th>
           </tr>
         </thead>
         <tbody>
@@ -1046,11 +1332,19 @@ for (const c of conversations) {
         <div><strong>Name:</strong> ${escapeHtml(row.name || "—")}</div>
         <div><strong>Email:</strong> ${escapeHtml(row.email || "—")}</div>
         <div><strong>Device:</strong> ${escapeHtml(row.device || "—")}</div>
+
+	<div><strong>Platform:</strong> ${escapeHtml(row.platform || "—")}</div>
+	<div><strong>Device ID:</strong> <span class="mono">${escapeHtml(row.device_id || "—")}</span></div>
+
         <div><strong>Session ID:</strong> <span class="mono">${escapeHtml(row.session_id || "—")}</span></div>
         <div><strong>Conversation ID:</strong> <span class="mono">${escapeHtml(row.conversation_id || "—")}</span></div>
         <div><strong>Created (PH):</strong> ${escapeHtml(formatPH(row.created_at || ""))}</div>
         <div><strong>Updated (PH):</strong> ${escapeHtml(formatPH(row.updated_at || ""))}</div>
-        <div><strong>Messages:</strong> ${convoMessages.length}</div>
+<div><strong>Messages:</strong> ${
+  convoMessages.filter((m) => m.role === "user").length
+}</div>
+
+
       </div>
 
       <h2>Messages</h2>
