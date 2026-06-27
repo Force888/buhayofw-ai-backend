@@ -601,14 +601,72 @@ app.get("/admin/visitors", requireAdmin, (req, res) => {
   const browsedOnly = rows.filter((r) => r.status === "Browsed only").length;
   const askedAi = rows.filter((r) => r.status === "Asked AI").length;
 
-  const body = `
-    <h1>Visitors</h1>
 
-    <div class="cards">
-      <div class="card"><div>Total visits shown</div><div class="big">${rows.length}</div></div>
-      <div class="card"><div>Browsed only</div><div class="big">${browsedOnly}</div></div>
-      <div class="card"><div>Asked AI</div><div class="big">${askedAi}</div></div>
+
+const todayKey = new Date().toISOString().slice(0, 10);
+
+const todayVisits = visits.filter(v => {
+  const d = new Date(Number(v.started_at || 0))
+    .toISOString()
+    .slice(0, 10);
+
+  return d === todayKey;
+});
+
+const todayAskedAi =
+  todayVisits.filter(v => v.asked_ai).length;
+
+const todayBrowsedOnly =
+  todayVisits.filter(v => !v.asked_ai).length;
+
+const todayConversion =
+  todayVisits.length
+    ? ((todayAskedAi / todayVisits.length) * 100).toFixed(1)
+    : "0";
+
+
+const uniqueVisitorsToday =
+  new Set(todayVisits.map(v => v.device_id).filter(Boolean)).size;
+
+
+const body = `
+  <h1>Visitors</h1>
+
+  <div class="cards">
+    <div class="card">
+      <div>Visits today</div>
+      <div class="big">${todayVisits.length}</div>
     </div>
+
+
+<div class="card">
+  <div>Unique visitors today</div>
+  <div class="big">${uniqueVisitorsToday}</div>
+</div>
+
+    <div class="card">
+      <div>Asked AI today</div>
+      <div class="big">${todayAskedAi}</div>
+    </div>
+
+    <div class="card">
+      <div>Browsed only today</div>
+      <div class="big">${todayBrowsedOnly}</div>
+    </div>
+
+    <div class="card">
+      <div>Conversion today</div>
+      <div class="big">${todayConversion}%</div>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-bottom:10px;">
+    Showing latest 200 visitor rows
+  </div>
+
+
+
+
 
     <div class="section">
       <table>

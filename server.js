@@ -1154,6 +1154,7 @@ const allowedImageCharacters = new Set([
   "alexander",
   "moses",
   "wux",
+  "robx",
   "sunx",
   "pinkx",
   "jax",
@@ -1252,6 +1253,19 @@ const requestedConversationId =
 if (requestedConversationId) {
   const existingConversation =
     findConversationById(requestedConversationId);
+
+
+if (
+  existingConversation &&
+  existingConversation.character_id &&
+  existingConversation.character_id !== selectedCharacter
+) {
+  return res.status(400).json({
+    error: "CHARACTER_MISMATCH",
+    message: "Conversation belongs to a different character."
+  });
+}
+
 
   if (
     existingConversation &&
@@ -1521,6 +1535,333 @@ return res.status(500).json({
 
   }
 });
+
+
+app.post("/ask-stream", async (req, res) => {
+  const startedAt = Date.now();
+  const sessionId = getSessionId(req);
+  setSessionCookie(res, sessionId);
+
+  const authUserId = getAuthUserId(req);
+  const authUser = authUserId ? findUserById(authUserId) : null;
+  const isLoggedIn = !!authUser;
+
+  const sendEvent = (type, data = {}) => {
+    res.write(`event: ${type}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const applyLimiter = (limiter) =>
+    new Promise((resolve, reject) => {
+      let finished = false;
+
+      const done = (err) => {
+        if (finished) return;
+        finished = true;
+        if (err) reject(err);
+        else resolve();
+      };
+
+      limiter(req, res, done);
+
+      setImmediate(() => {
+        if (res.headersSent && !res.writableEnded) done();
+      });
+    });
+
+  try {
+    let {
+      question,
+      history = [],
+      conversation_id,
+      character_id
+    } = req.body || {};
+
+    if (!question || typeof question !== "string" || !question.trim()) {
+      return res.status(400).json({ error: "Missing question" });
+    }
+
+    const trimmedQuestion = question.trim();
+
+    if (trimmedQuestion.length > 500) {
+      return res.status(400).json({
+        error: "QUESTION_TOO_LONG",
+        message: "Please keep your message shorter."
+      });
+    }
+
+    if (isLoggedIn) {
+      await applyLimiter(userBurstLimiter);
+      if (res.headersSent) return;
+      await applyLimiter(userDailyLimiter);
+      if (res.headersSent) return;
+    } else {
+      await applyLimiter(guestBurstLimiter);
+      if (res.headersSent) return;
+      await applyLimiter(guestDailyLimiter);
+      if (res.headersSent) return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    const deviceId = getDeviceId(req);
+    const clientIp = getClientIp(req);
+    const ipHash = sha256(clientIp);
+    const userAgent = req.get("user-agent") || "";
+    const deviceType = getDeviceType(userAgent);
+
+    const selectedCharacter =
+      typeof character_id === "string" && character_id.trim()
+        ? character_id.trim()
+        : "general";
+
+    if (!getSession(sessionId)) {
+      upsertSession({
+        session_id: sessionId,
+        device_id: deviceId,
+        ip_hash: ipHash,
+        user_agent: userAgent,
+        device_type: deviceType,
+        created_at: nowIso(),
+        last_active_at: nowIso(),
+        message_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_usd: 0,
+        is_rate_limited: false,
+        is_blocked: false,
+        logged_in: isLoggedIn,
+        user_id: isLoggedIn ? authUser.user_id : null,
+        user_name: isLoggedIn ? authUser.name : null,
+        user_email: isLoggedIn ? authUser.email : null,
+        last_character_id: selectedCharacter,
+        last_conversation_id: null
+      });
+    }
+
+    const session = getSession(sessionId);
+
+    const SIGNUP_PROMPT_AT = 16;
+    const SIGNUP_PROMPT_COOLDOWN_HOURS = 24;
+
+    const shouldShowSignupPrompt = shouldPromptSignupNow(
+      session,
+      isLoggedIn,
+      SIGNUP_PROMPT_AT,
+      SIGNUP_PROMPT_COOLDOWN_HOURS
+    );
+
+    let activeConversationId = null;
+
+    const requestedConversationId =
+      typeof conversation_id === "string" && conversation_id.trim()
+        ? conversation_id.trim()
+        : null;
+
+    if (requestedConversationId) {
+      const existingConversation = findConversationById(requestedConversationId);
+
+      if (
+        existingConversation &&
+        (
+          (isLoggedIn && existingConversation.user_id === authUser.user_id) ||
+          (!isLoggedIn && !existingConversation.user_id)
+        )
+      ) {
+        activeConversationId = existingConversation.conversation_id;
+        touchConversation(activeConversationId, question);
+      } else {
+        sendEvent("error", {
+          message: "That conversation is not available."
+        });
+        return res.end();
+      }
+    } else {
+      const createdConversation = createConversation(
+        isLoggedIn ? authUser.user_id : null,
+        question,
+        selectedCharacter
+      );
+
+      activeConversationId = createdConversation.conversation_id;
+    }
+
+    updateSessionMeta(sessionId, {
+      logged_in: isLoggedIn,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      user_name: isLoggedIn ? authUser.name : null,
+      user_email: isLoggedIn ? authUser.email : null,
+      last_character_id: selectedCharacter,
+      last_conversation_id: activeConversationId || null
+    });
+
+    if (shouldShowSignupPrompt) {
+      updateSessionMeta(sessionId, {
+        last_signup_prompt_at: nowIso()
+      });
+    }
+
+    const memoryOwner = {
+      userId: isLoggedIn ? authUser.user_id : null,
+      deviceId
+    };
+
+    const currentMemory = loadMemory(memoryOwner);
+
+    if (isLoggedIn && authUser && authUser.name) {
+      const currentName = String(currentMemory.profile?.name || "").trim();
+
+      if (!currentName) {
+        currentMemory.profile = {
+          ...currentMemory.profile,
+          name: authUser.name
+        };
+      }
+    }
+
+    const { inputMessages } = buildInputMessages({
+      selectedCharacter,
+      memory: currentMemory,
+      history,
+      trimmedQuestion
+    });
+
+    const timeContextText = buildTimeContext({
+      isLoggedIn,
+      authUser,
+      activeConversationId
+    });
+
+    inputMessages.splice(1, 0, {
+      role: "system",
+      content: timeContextText
+    });
+
+    sendEvent("meta", {
+      conversation_id: activeConversationId,
+      character_id: selectedCharacter,
+      signup_prompt: shouldShowSignupPrompt
+    });
+
+    let finalText = "";
+    let usage = {};
+
+    const stream = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: inputMessages,
+      stream: true
+    });
+
+    for await (const event of stream) {
+      if (event.type === "response.output_text.delta" && event.delta) {
+        finalText += event.delta;
+        sendEvent("delta", { text: event.delta });
+      }
+
+      if (event.type === "response.completed") {
+        usage = event.response?.usage || {};
+      }
+    }
+
+    const cleaned = stripLatex(String(finalText).replace(/\\n/g, "\n")).trim();
+
+    const inputTokens =
+      usage.input_tokens ||
+      usage.prompt_tokens ||
+      0;
+
+    const outputTokens =
+      usage.output_tokens ||
+      usage.completion_tokens ||
+      0;
+
+    const totalTokens =
+      usage.total_tokens ||
+      (inputTokens + outputTokens);
+
+    const estimatedCostUsd = estimateCostUsd(inputTokens, outputTokens);
+
+    const memoryUpdates = extractMemoryUpdates({
+      currentMemory,
+      userText: trimmedQuestion,
+      assistantText: cleaned,
+      selectedCharacter
+    });
+
+    const nextMemory = mergeMemory(currentMemory, memoryUpdates);
+    saveMemory(memoryOwner, nextMemory);
+
+    appendJsonLine(MESSAGES_FILE, {
+      session_id: sessionId,
+      conversation_id: activeConversationId,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      character_id: selectedCharacter,
+      role: "user",
+      content: trimmedQuestion,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      estimated_cost_usd: 0,
+      created_at: nowIso()
+    });
+
+    appendJsonLine(MESSAGES_FILE, {
+      session_id: sessionId,
+      conversation_id: activeConversationId,
+      user_id: isLoggedIn ? authUser.user_id : null,
+      character_id: selectedCharacter,
+      role: "assistant",
+      content: cleaned,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
+      estimated_cost_usd: estimatedCostUsd,
+      latency_ms: Date.now() - startedAt,
+      created_at: nowIso()
+    });
+
+    incrementSessionUsage(sessionId, {
+      message_count: 2,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
+      estimated_cost_usd: estimatedCostUsd
+    });
+
+    sendEvent("done", {
+      text: cleaned,
+      signup_prompt: shouldShowSignupPrompt,
+      conversation_id: activeConversationId,
+      character_id: selectedCharacter
+    });
+
+    return res.end();
+
+  } catch (err) {
+    console.error("AI stream error:", err);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error: "AI_STREAM_FAILED",
+        message: err?.message || String(err) || "May problema sa system."
+      });
+    }
+
+    sendEvent("error", {
+      message: err?.message || String(err) || "May problema sa system."
+    });
+
+    return res.end();
+  }
+});
+
+
+
 
 app.post("/signup", (req, res) => {
   try {
@@ -1845,15 +2186,38 @@ app.get("/me", (req, res) => {
     }
 
     const user = findUserById(userId);
+
+let unlockMessageCount = 0;
+
+const sessions = readJson(SESSIONS_FILE, []);
+
+for (const s of sessions) {
+  if (s.user_id === user.user_id) {
+    unlockMessageCount += Number(s.message_count || 0);
+  }
+}
+
     if (!user) {
       clearAuthCookies(res);
       return res.json({ logged_in: false, user: null });
     }
 
-    return res.json({
-      logged_in: true,
-      user: sanitizeUser(user)
-    });
+return res.json({
+  logged_in: true,
+  user: sanitizeUser(user),
+
+  unlocks: {
+    wux: unlockMessageCount >= 6,
+    magdalena: unlockMessageCount >= 12,
+    alexander: unlockMessageCount >= 20
+  },
+
+  progress: {
+    message_count: unlockMessageCount
+  }
+});
+
+
   } catch (err) {
     console.error("Me error:", err?.message || err);
     return res.status(500).json({ error: "ME_FAILED", message: "Failed to load account." });
@@ -1861,6 +2225,12 @@ app.get("/me", (req, res) => {
 });
 
 app.get("/welcome", async (req, res) => {
+
+  return res.json({
+    ok: true,
+    text: ""
+  });
+
   try {
     const authUserId = getAuthUserId(req);
     const authUser = authUserId ? findUserById(authUserId) : null;
@@ -1886,11 +2256,13 @@ app.get("/welcome", async (req, res) => {
 
     let text = "";
 
-    if (absentHours < 12) {
+    if (absentHours < 24) {
       text = "";
     } else if (absentHours >= 72) {
       text = buildLongTimeNoSeeGreeting(name);
     } else {
+
+/*
       let majorNewsText = "";
 
 try {
@@ -1909,15 +2281,16 @@ try {
 } catch (err) {
   console.error("Welcome news check failed:", err);
 }
+*/
 
-      if (majorNewsText) {
-        text = majorNewsText;
-      } else if (absentHours >= 24) {
-        text = buildTimeGreetingFallback({ dayPart, name });
-      } else {
-        text = "";
-      }
-    }
+if (absentHours >= 24) {
+  text = buildTimeGreetingFallback({ dayPart, name });
+} else {
+  text = "";
+}
+
+
+}
 
     return res.json({
       ok: true,
@@ -1927,6 +2300,8 @@ try {
     console.error("Welcome error:", err);
     return res.json({ ok: false, text: "" });
   }
+
+
 });
 
 app.get("/admin/stats", (req, res) => {
