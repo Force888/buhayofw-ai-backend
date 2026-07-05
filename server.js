@@ -844,6 +844,65 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
+
+
+app.post(
+  "/voice/session",
+  express.text({ type: ["application/sdp", "text/plain"] }),
+  async (req, res) => {
+    try {
+      const sdp = String(req.body || "");
+
+      if (!sdp.trim()) {
+        return res.status(400).send("Missing SDP offer");
+      }
+
+      const sessionConfig = {
+        type: "realtime",
+        model: "gpt-realtime",
+        output_modalities: ["audio"],
+        audio: {
+          output: {
+            voice: "alloy"
+          }
+        },
+        instructions:
+          "You are PinkX, a warm, playful AI companion. Speak naturally, briefly, and emotionally. Start with a short friendly greeting in Taglish."
+      };
+
+      const fd = new FormData();
+      fd.set("sdp", sdp);
+      fd.set("session", JSON.stringify(sessionConfig));
+
+      const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: fd
+      });
+
+      const answerSdp = await response.text();
+
+      if (!response.ok) {
+        console.error("Realtime call error:", answerSdp);
+        return res.status(500).send(answerSdp);
+      }
+
+      res.type("application/sdp").send(answerSdp);
+
+    } catch (err) {
+      console.error("Voice session exception:", err);
+
+      res.status(500).send(
+        err?.message || "Voice session failed"
+      );
+    }
+  }
+);
+
+
+
 function stripLatex(text = "") {
   let out = text
     .replace(/\\\[/g, "")
