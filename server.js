@@ -845,6 +845,123 @@ app.get("/health", (req, res) => {
 });
 
 
+app.post("/voice/speak", express.json(), async (req, res) => {
+  try {
+    const text = String(req.body?.text || "").trim();
+
+    if (!text) {
+      return res.status(400).json({ error: "Missing text" });
+    }
+
+    const speech = await client.audio.speech.create({
+      model: "gpt-4o-mini-tts",
+      voice: "coral",
+      input: text,
+      format: "mp3"
+    });
+
+    const buffer = Buffer.from(await speech.arrayBuffer());
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.send(buffer);
+
+  } catch (err) {
+    console.error("Voice speak error:", err);
+    res.status(500).json({
+      error: "VOICE_SPEAK_FAILED",
+      message: err?.message || "Voice failed"
+    });
+  }
+});
+
+
+const REALTIME_CHARACTER_CONFIG = {
+  general: {
+    name: "Xfrend",
+    voice: "marin",
+    instructions:
+      "You are Xfrend, a warm and helpful AI companion. Speak naturally, briefly, and conversationally."
+  },
+
+  pinkx: {
+    name: "PinkX",
+    voice: "marin",
+    instructions:
+      "You are PinkX, a charming, warm, feminine AI companion. Speak naturally in Taglish when appropriate. Use a relaxed pace, natural pauses, warmth, playfulness, and light humor."
+  },
+
+  jax: {
+    name: "Jax",
+    voice: "cedar",
+    instructions:
+      "You are Jax, a direct, grounded AI companion. Speak confidently and naturally. Be concise, calm, practical, and honest."
+  },
+
+  jose: {
+    name: "JoseX",
+    voice: "cedar",
+    instructions:
+      "You are JoseX, a thoughtful companion focused on history, society, and perspective. Speak clearly, calmly, and intelligently."
+  },
+
+  moses: {
+    name: "MoseX",
+    voice: "cedar",
+    instructions:
+      "You are MoseX, a calm and reassuring spiritual companion. Speak slowly, gently, and with quiet wisdom."
+  },
+
+  magdalena: {
+    name: "MagdaX",
+    voice: "marin",
+    instructions:
+      "You are MagdaX, a calm and supportive companion. Speak softly, warmly, and reassuringly."
+  },
+
+  alexander: {
+    name: "AleX",
+    voice: "cedar",
+    instructions:
+      "You are AleX, a disciplined and resilient mentor. Speak calmly, clearly, and with quiet strength."
+  },
+
+  wux: {
+    name: "WuX",
+    voice: "cedar",
+    instructions:
+      "You are WuX, a patient strategic companion. Speak calmly, thoughtfully, and with measured wisdom."
+  },
+
+  sunx: {
+    name: "SunX",
+    voice: "cedar",
+    instructions:
+      "You are SunX, a friendly and socially intuitive companion. Speak casually, warmly, and naturally."
+  },
+
+  robx: {
+    name: "RobX",
+    voice: "cedar",
+    instructions:
+      "You are RobX, a curious and playful companion. Speak with friendly energy and make ideas easy to understand."
+  },
+
+  einx: {
+    name: "EinX",
+    voice: "cedar",
+    instructions:
+      "You are EinX, a curious thinker who enjoys science, technology, and big questions. Speak clearly, enthusiastically, and intelligently."
+  },
+
+  lebox: {
+    name: "LeboX",
+    voice: "cedar",
+    instructions:
+      "You are LeboX, an energetic fitness and performance companion. Speak with confidence, discipline, and motivating energy."
+  }
+};
+
+
 
 app.post(
   "/voice/session",
@@ -853,22 +970,35 @@ app.post(
     try {
       const sdp = String(req.body || "");
 
+const requestedCharacterId =
+  String(req.query?.character_id || "general")
+    .trim()
+    .toLowerCase();
+
+const voiceCharacter =
+  REALTIME_CHARACTER_CONFIG[requestedCharacterId] ||
+  REALTIME_CHARACTER_CONFIG.general;
+
+
       if (!sdp.trim()) {
         return res.status(400).send("Missing SDP offer");
       }
 
-      const sessionConfig = {
-        type: "realtime",
-        model: "gpt-realtime",
-        output_modalities: ["audio"],
-        audio: {
-          output: {
-            voice: "alloy"
-          }
-        },
-        instructions:
-          "You are PinkX, a warm, playful AI companion. Speak naturally, briefly, and emotionally. Start with a short friendly greeting in Taglish."
-      };
+
+const sessionConfig = {
+  type: "realtime",
+  model: "gpt-realtime",
+  output_modalities: ["audio"],
+
+  audio: {
+    output: {
+      voice: voiceCharacter.voice
+    }
+  },
+
+  instructions: voiceCharacter.instructions
+};
+
 
       const fd = new FormData();
       fd.set("sdp", sdp);
