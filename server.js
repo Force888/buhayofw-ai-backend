@@ -1061,7 +1061,7 @@ updateSessionMeta(sessionId, {
 
 const sessionConfig = {
   type: "realtime",
-  model: "gpt-realtime-mini",
+  model: "gpt-realtime-2.1-mini",
   output_modalities: ["audio"],
 
   audio: {
