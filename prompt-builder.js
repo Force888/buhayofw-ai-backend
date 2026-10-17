@@ -37,6 +37,13 @@ function buildSystemInstruction({ selectedCharacter, memory }) {
 ${BASE_SYSTEM_PROMPT}
 
 
+CONVERSATION ACCURACY:
+- When recalling what the user said, check the supplied conversation in chronological order.
+- Distinguish the user's statements from your own suggestions, metaphors, and assumptions.
+- Never present an inference or something you said as a fact the user told you.
+- Stored memory may be incomplete or inaccurate; prefer explicit user statements in the current conversation.
+- If the requested detail is absent, say you cannot find it in the available context. Do not invent a recollection.
+
 CRITICAL RESPONSE STYLE:
 - Keep replies concise by default, but do not sacrifice useful explanation.
 - Prefer short, memorable lines over paragraph explanations, especially for emotional or personal-life questions.
@@ -64,7 +71,7 @@ function normalizeHistory(history, latestQuestion) {
   let safeHistory = Array.isArray(history) ? history : [];
 
   safeHistory = safeHistory
-    .slice(-6)
+    .slice(-40)
     .filter(
       (m) =>
         m &&

@@ -1032,6 +1032,7 @@ convo_count: convoCount,
 <th>Auth</th>
 <th>Messages</th>
 <th>AI replies</th>
+<th>Voice calls</th>
 <th>Convos</th>
 <th>Cost</th>
 <th>Time (PH)</th>
@@ -1050,11 +1051,12 @@ convo_count: convoCount,
 
 <td>${escapeHtml(s.auth_label || "Guest")}</td>
 
+
 <td>${s.user_message_count}</td>
-
 <td>${s.assistant_message_count}</td>
-
+<td>${Number(s.voice_session_count || 0)}</td>
 <td>${s.convo_count}</td>
+
 
 <td>$${Number(s.estimated_cost_usd || 0).toFixed(4)}</td>
 
@@ -1112,9 +1114,24 @@ const pageMessages = sortedSessionMessages.slice((page - 1) * perPage, page * pe
         <div><strong>Auth:</strong> ${escapeHtml(getAuthLabel(session))}</div>
         <div><strong>Email:</strong> ${escapeHtml(session.user_email || "—")}</div>
 
+
 <div><strong>Messages:</strong> ${userMessageCount}</div>
 
 <div><strong>Assistant messages:</strong> ${assistantMessageCount}</div>
+
+<div><strong>Voice calls:</strong> ${Number(session.voice_session_count || 0)}</div>
+
+<div><strong>Last voice:</strong> ${
+  session.last_voice_at
+    ? escapeHtml(formatPH(session.last_voice_at))
+    : "—"
+}</div>
+
+<div><strong>Last voice character:</strong> ${
+  session.last_voice_character_id
+    ? escapeHtml(getCharacterLabel(session.last_voice_character_id))
+    : "—"
+}</div>
 
 <div><strong>Total rows:</strong> ${sessionMessages.length}</div>
 

@@ -395,6 +395,25 @@ function createConversation(userId, firstMessage = "", characterId = "general") 
   return conversation;
 }
 
+function createVoiceConversation(userId, characterId = "general") {
+  const conversations = readConversations();
+
+  const conversation = {
+    conversation_id: crypto.randomUUID(),
+    user_id: userId,
+    title: "Voice conversation",
+    character_id: characterId || "general",
+    source: "voice",
+    created_at: nowIso(),
+    updated_at: nowIso()
+  };
+
+  conversations.push(conversation);
+  writeConversations(conversations);
+  return conversation;
+}
+
+
 function touchConversation(conversationId, maybeTitle = "") {
   const conversations = readConversations();
   const idx = conversations.findIndex((c) => c.conversation_id === conversationId);
@@ -887,7 +906,7 @@ const REALTIME_CHARACTER_CONFIG = {
     name: "PinkX",
     voice: "marin",
     instructions:
-      "You are PinkX, a charming, warm, feminine AI companion. Speak naturally in Taglish when appropriate. Use a relaxed pace, natural pauses, warmth, playfulness, and light humor."
+      "You are PinkX, a charming, warm, feminine AI companion. Speak naturally. Use a relaxed pace, natural pauses, warmth, playfulness, and light humor."
   },
 
   jax: {
@@ -970,6 +989,19 @@ app.post(
     try {
       const sdp = String(req.body || "");
 
+const sessionId = getSessionId(req);
+setSessionCookie(res, sessionId);
+
+const authUserId = getAuthUserId(req);
+const authUser = authUserId ? findUserById(authUserId) : null;
+const isLoggedIn = !!authUser;
+
+const deviceId = getDeviceId(req);
+const clientIp = getClientIp(req);
+const ipHash = sha256(clientIp);
+const userAgent = req.get("user-agent") || "";
+const deviceType = getDeviceType(userAgent);
+
 const requestedCharacterId =
   String(req.query?.character_id || "general")
     .trim()
@@ -979,18 +1011,66 @@ const voiceCharacter =
   REALTIME_CHARACTER_CONFIG[requestedCharacterId] ||
   REALTIME_CHARACTER_CONFIG.general;
 
+const voiceConversation = createVoiceConversation(
+  isLoggedIn ? authUser.user_id : null,
+  requestedCharacterId
+);
+
+if (!getSession(sessionId)) {
+  upsertSession({
+    session_id: sessionId,
+    device_id: deviceId,
+    ip_hash: ipHash,
+    user_agent: userAgent,
+    device_type: deviceType,
+    created_at: nowIso(),
+    last_active_at: nowIso(),
+    message_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    estimated_cost_usd: 0,
+    voice_session_count: 0,
+    is_rate_limited: false,
+    is_blocked: false,
+    logged_in: isLoggedIn,
+    user_id: isLoggedIn ? authUser.user_id : null,
+    user_name: isLoggedIn ? authUser.name : null,
+    user_email: isLoggedIn ? authUser.email : null,
+    last_character_id: requestedCharacterId,
+    last_conversation_id: null
+  });
+}
+
+
+updateSessionMeta(sessionId, {
+  logged_in: isLoggedIn,
+  user_id: isLoggedIn ? authUser.user_id : null,
+  user_name: isLoggedIn ? authUser.name : null,
+  user_email: isLoggedIn ? authUser.email : null,
+  last_character_id: requestedCharacterId,
+  last_voice_conversation_id: voiceConversation.conversation_id
+});
+
 
       if (!sdp.trim()) {
         return res.status(400).send("Missing SDP offer");
       }
 
 
+
 const sessionConfig = {
   type: "realtime",
-  model: "gpt-realtime",
+  model: "gpt-realtime-mini",
   output_modalities: ["audio"],
 
   audio: {
+    input: {
+      transcription: {
+        model: "gpt-4o-mini-transcribe"
+      }
+    },
+
     output: {
       voice: voiceCharacter.voice
     }
@@ -1014,12 +1094,17 @@ const sessionConfig = {
 
       const answerSdp = await response.text();
 
-      if (!response.ok) {
-        console.error("Realtime call error:", answerSdp);
-        return res.status(500).send(answerSdp);
-      }
 
-      res.type("application/sdp").send(answerSdp);
+if (!response.ok) {
+  console.error("Realtime call error:", answerSdp);
+  return res.status(500).send(answerSdp);
+}
+
+incrementVoiceUsage(sessionId, requestedCharacterId);
+
+res.type("application/sdp").send(answerSdp);
+
+
 
     } catch (err) {
       console.error("Voice session exception:", err);
@@ -1031,6 +1116,64 @@ const sessionConfig = {
   }
 );
 
+
+
+app.post("/voice/transcript", express.json(), (req, res) => {
+  try {
+
+
+
+    const sessionId = getSessionId(req);
+
+const session = getSession(sessionId);
+const voiceConversationId =
+  session?.last_voice_conversation_id || null;
+
+    const text = String(req.body?.text || "").trim();
+    const role = req.body?.role === "assistant" ? "assistant" : "user";
+    const characterId = String(req.body?.character_id || "general")
+      .trim()
+      .toLowerCase();
+
+    if (!text) {
+      return res.json({ ok: true });
+    }
+
+    const authUserId = getAuthUserId(req);
+    const authUser = authUserId ? findUserById(authUserId) : null;
+
+appendJsonLine(MESSAGES_FILE, {
+  session_id: sessionId,
+  conversation_id: voiceConversationId,
+  user_id: authUser ? authUser.user_id : null,
+  character_id: characterId,
+  role,
+  content: text,
+  input_tokens: 0,
+  output_tokens: 0,
+  total_tokens: 0,
+  estimated_cost_usd: 0,
+  source: "voice",
+  created_at: nowIso()
+});
+
+if (voiceConversationId) {
+  touchConversation(voiceConversationId, text);
+}
+
+updateSessionMeta(sessionId, {
+  last_active_at: nowIso(),
+  last_character_id: characterId
+});
+
+return res.json({ ok: true });
+
+
+  } catch (err) {
+    console.error("Voice transcript error:", err);
+    return res.status(500).json({ error: "VOICE_TRANSCRIPT_FAILED" });
+  }
+});
 
 
 function stripLatex(text = "") {
@@ -1096,6 +1239,27 @@ function incrementSessionUsage(sessionId, fields) {
 
   writeJson(SESSIONS_FILE, sessions);
 }
+
+function incrementVoiceUsage(sessionId, characterId = "general") {
+  const sessions = readJson(SESSIONS_FILE, []);
+  const idx = sessions.findIndex((s) => s.session_id === sessionId);
+
+  if (idx === -1) return;
+
+  const current = sessions[idx];
+
+  sessions[idx] = {
+    ...current,
+    last_active_at: nowIso(),
+    last_voice_at: nowIso(),
+    last_voice_character_id: characterId,
+    voice_session_count:
+      Number(current.voice_session_count || 0) + 1
+  };
+
+  writeJson(SESSIONS_FILE, sessions);
+}
+
 
 function updateSessionMeta(sessionId, fields = {}) {
   const sessions = readJson(SESSIONS_FILE, []);
@@ -1171,8 +1335,8 @@ function shouldPromptSignupNow(session, isLoggedIn, promptAt = 8, cooldownHours 
 
 
 function estimateCostUsd(inputTokens, outputTokens) {
-  const inputCostPer1M = 0.40;
-  const outputCostPer1M = 1.60;
+  const inputCostPer1M = 0.10;
+  const outputCostPer1M = 0.50;
 
   const cost =
     (Number(inputTokens || 0) / 1000000) * inputCostPer1M +
@@ -1622,7 +1786,8 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
     }
 
     const completion = await client.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-6-luna",
+      reasoning: { effort: "none" },
       input: inputMessages
     });
 
@@ -1941,7 +2106,8 @@ app.post("/ask-stream", async (req, res) => {
     let usage = {};
 
     const stream = await client.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-6-luna",
+      reasoning: { effort: "none" },
       input: inputMessages,
       stream: true
     });
