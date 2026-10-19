@@ -874,8 +874,7 @@ app.post("/voice/speak", express.json(), async (req, res) => {
 
     const speech = await client.audio.speech.create({
       model: "gpt-4o-mini-tts",
-      voice: Object.hasOwn(REALTIME_CHARACTER_CONFIG, req.body?.character_id)
-        ? REALTIME_CHARACTER_CONFIG[req.body.character_id].voice : "coral",
+      voice: "coral",
       input: text,
       format: "mp3"
     });
@@ -1016,7 +1015,6 @@ const voiceConversation = createVoiceConversation(
   isLoggedIn ? authUser.user_id : null,
   requestedCharacterId
 );
-preserveEntryGreeting(sessionId, requestedCharacterId, voiceConversation.conversation_id, isLoggedIn ? authUser.user_id : null);
 
 if (!getSession(sessionId)) {
   upsertSession({
@@ -1078,12 +1076,7 @@ const sessionConfig = {
     }
   },
 
-  instructions: voiceCharacter.instructions + (() => {
-    const greeting = entryGreetings.get(sessionId);
-    if (!greeting?.text || greeting.expires < Date.now() || greeting.characterId !== requestedCharacterId) return "";
-    return "\nThe assistant has already opened this conversation with: " + JSON.stringify(greeting.text) +
-      ". Keep this in conversation context. Do not greet again, even if asked to greet on connection. Wait for the user's next message and continue from this greeting.";
-  })()
+  instructions: voiceCharacter.instructions
 };
 
 
@@ -1661,7 +1654,6 @@ if (
 
   activeConversationId =
     createdConversation.conversation_id;
-  preserveEntryGreeting(sessionId, selectedCharacter, activeConversationId, isLoggedIn ? authUser.user_id : null);
 }
 
 
@@ -2051,7 +2043,6 @@ app.post("/ask-stream", async (req, res) => {
       );
 
       activeConversationId = createdConversation.conversation_id;
-      preserveEntryGreeting(sessionId, selectedCharacter, activeConversationId, isLoggedIn ? authUser.user_id : null);
     }
 
     updateSessionMeta(sessionId, {
@@ -2588,66 +2579,7 @@ return res.json({
   }
 });
 
-// Short lived entry context also reaches native voice through the existing session cookie.
-const entryGreetings = new Map();
-function preserveEntryGreeting(sessionId, characterId, conversationId, userId) {
-  const greeting = entryGreetings.get(sessionId);
-  if (!greeting?.text || greeting.expires < Date.now() || greeting.characterId !== characterId) return;
-  greeting.savedConversations ||= new Set();
-  if (greeting.savedConversations.has(conversationId)) return;
-  appendJsonLine(MESSAGES_FILE, {
-    session_id: sessionId, conversation_id: conversationId, user_id: userId,
-    character_id: characterId, role: "assistant", content: greeting.text,
-    source: "entry", input_tokens: 0, output_tokens: 0, total_tokens: 0,
-    estimated_cost_usd: 0, created_at: nowIso()
-  });
-  greeting.savedConversations.add(conversationId);
-}
-
-const entryGreetingLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 12,
-  standardHeaders: true, legacyHeaders: false
-});
-
-app.get("/welcome", entryGreetingLimiter, async (req, res) => {
-  if (req.query.entry === "1") {
-    const characterId = String(req.query.character_id || "general").toLowerCase();
-    if (!Object.hasOwn(CHARACTER_CONFIG, characterId)) {
-      return res.status(400).json({ error: "UNKNOWN_CHARACTER" });
-    }
-    const sessionId = getSessionId(req);
-    setSessionCookie(res, sessionId);
-    const now = Date.now();
-    for (const [key, value] of entryGreetings) {
-      if (value.expires < now) entryGreetings.delete(key);
-    }
-    if (entryGreetings.size >= 2000) entryGreetings.delete(entryGreetings.keys().next().value);
-    const greeting = { characterId, text: "", expires: now + 30 * 60 * 1000 };
-    entryGreetings.set(sessionId, greeting);
-    res.on?.("close", () => {
-      if (!res.writableEnded && entryGreetings.get(sessionId) === greeting) entryGreetings.delete(sessionId);
-    });
-    try {
-      const { inputMessages } = buildInputMessages({
-        selectedCharacter: characterId,
-        memory: {}, history: [],
-        trimmedQuestion: "Open a fresh conversation with one friendly greeting in your character's style. Use one short sentence, at most 20 words. No stage directions or markdown. Do not assume prior conversation or user details."
-      });
-      const completion = await client.responses.create({
-        model: "gpt-6-luna", reasoning: { effort: "none" },
-        max_output_tokens: 120, input: inputMessages
-      });
-      const text = String(completion.output_text || "").trim();
-      if (!text) throw new Error("Empty entry greeting");
-      if (entryGreetings.get(sessionId) === greeting) greeting.text = text;
-      res.setHeader("Cache-Control", "no-store");
-      return res.json({ ok: true, text });
-    } catch (err) {
-      console.error("Entry greeting failed:", err.message);
-      return res.status(502).json({ error: "ENTRY_GREETING_FAILED" });
-    }
-  }
-
+app.get("/welcome", async (req, res) => {
 
   return res.json({
     ok: true,
