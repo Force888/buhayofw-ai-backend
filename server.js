@@ -1189,31 +1189,9 @@ return res.json({ ok: true });
 });
 
 
-function stripLatex(text = "") {
-  let out = text
-    .replace(/\\\[/g, "")
-    .replace(/\\\]/g, "")
-    .replace(/\\\(/g, "")
-    .replace(/\\\)/g, "");
-
-  out = out
-    .replace(/\\times/g, " * ")
-    .replace(/\\cdot/g, " * ")
-    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "($1/$2)")
-    .replace(/\\text\{([^}]+)\}/g, "$1")
-    .replace(/\\,/g, " ")
-    .replace(/\\;/g, " ")
-    .replace(/\\!/g, "")
-    .replace(/\s{2,}/g, " ");
-
-  return out.trim();
-}
-
-function cleanChatAnswer(answer, textRoleplay) {
-  const text = String(answer).replace(/\\n/g, "\n");
-  return textRoleplay
-    ? text.split("\n").map(stripLatex).join("\n").trim()
-    : stripLatex(text);
+function cleanChatAnswer(answer) {
+  // Preserve Markdown and TeX between provider output, the API and saved history.
+  return String(answer ?? "").trim();
 }
 
 function dialogueForMemory(answer, textRoleplay) {
@@ -1824,7 +1802,7 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
       completion.output?.[0]?.content?.[0]?.text ||
       "";
 
-    const cleaned = cleanChatAnswer(rawAnswer, textRoleplay);
+    const cleaned = cleanChatAnswer(rawAnswer);
 
     const usage = completion.usage || {};
     const inputTokens =
@@ -2155,7 +2133,7 @@ app.post("/ask-stream", async (req, res) => {
       }
     }
 
-    const cleaned = cleanChatAnswer(finalText, textRoleplay);
+    const cleaned = cleanChatAnswer(finalText);
 
     const inputTokens =
       usage.input_tokens ||
