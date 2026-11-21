@@ -1016,7 +1016,10 @@ const voiceConversation = createVoiceConversation(
   isLoggedIn ? authUser.user_id : null,
   requestedCharacterId
 );
-preserveEntryGreeting(sessionId, requestedCharacterId, voiceConversation.conversation_id, isLoggedIn ? authUser.user_id : null);
+const realtimeOpening = req.query?.opening === "1";
+if (!realtimeOpening) {
+  preserveEntryGreeting(sessionId, requestedCharacterId, voiceConversation.conversation_id, isLoggedIn ? authUser.user_id : null);
+}
 
 if (!getSession(sessionId)) {
   upsertSession({
@@ -1079,6 +1082,9 @@ const sessionConfig = {
   },
 
   instructions: voiceCharacter.instructions + (() => {
+    if (realtimeOpening) {
+      return "\nOpen this new conversation with one brief, natural spoken greeting in character. After that, wait for the user and continue normally.";
+    }
     const greeting = entryGreetings.get(sessionId);
     if (!greeting?.text || greeting.expires < Date.now() || greeting.characterId !== requestedCharacterId) return "";
     return "\nThe assistant has already opened this conversation with: " + JSON.stringify(greeting.text) +
