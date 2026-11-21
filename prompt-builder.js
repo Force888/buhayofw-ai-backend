@@ -105,18 +105,23 @@ function normalizeHistory(history, latestQuestion) {
   };
 }
 
+const CHAT_MATH_FORMAT = String.raw`When a typed reply contains mathematics, use LaTeX. Wrap inline math in \(...\), for example \(ax^2 + bx + c\). Put display equations on their own lines and wrap them in \[...\], using commands like \frac, \sqrt, and \pm. Keep math delimiters outside Markdown code spans and fences, which are reserved for literal code.`;
+
 function buildInputMessages({
   selectedCharacter,
   memory,
   history,
   trimmedQuestion,
-  textRoleplay = false
+  textRoleplay = false,
+  formatChatMath = false
 }) {
-  const instructions = buildSystemInstruction({
+  const systemInstruction = buildSystemInstruction({
     selectedCharacter,
     memory,
     textRoleplay
   });
+
+  const instructions = formatChatMath ? `${systemInstruction}\n\n${CHAT_MATH_FORMAT}` : systemInstruction;
 
   const { safeHistory, shouldAppendQuestion } = normalizeHistory(history, trimmedQuestion);
 

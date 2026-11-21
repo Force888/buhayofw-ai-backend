@@ -1722,7 +1722,8 @@ if (shouldShowSignupPrompt) {
       memory: currentMemory,
       history,
       trimmedQuestion,
-      textRoleplay
+      textRoleplay,
+      formatChatMath: true
     });
 
 if (preparedImage) {
@@ -2112,7 +2113,8 @@ app.post("/ask-stream", async (req, res) => {
       memory: currentMemory,
       history,
       trimmedQuestion,
-      textRoleplay
+      textRoleplay,
+      formatChatMath: true
     });
 
     const timeContextText = buildTimeContext({
