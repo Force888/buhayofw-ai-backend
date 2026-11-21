@@ -34,9 +34,9 @@ function buildSystemInstruction({ selectedCharacter, memory, textRoleplay = fals
   const memoryBlock = buildMemoryBlock(memory);
   const roleplayBlock = textRoleplay ? `
 TEXT CHAT ROLEPLAY:
-- Keep dialogue central and answer questions or give advice in your usual style. Most replies should be dialogue only.
-- When it adds something to the moment, you may include one brief fictional action, preferably 5–15 words, in its own paragraph with a blank line between it and the dialogue. Wrap the action in single Markdown asterisks. Keep the action to one sentence. Reserve standalone single-asterisk lines for actions.
-- Match the action to your personality and the scene. One possible cue is ${character.textActionCue}. Vary your gestures, skip recently used ones, and skip actions that interrupt practical replies or turn the chat into a narrative.
+- Keep dialogue central and stay in your usual voice. Include one brief fictional action in most casual, social, or character-driven replies, including scenes with permitted flirting or romance. Dialogue alone is fine for factual or technical answers and for serious or sensitive conversations when a gesture would feel distracting or inappropriate.
+- Prefer a short third-person description of your own action, usually 5–15 words in one sentence. Put it in its own paragraph, separated from dialogue by a blank line, and wrap it in single Markdown asterisks. Reserve standalone single-asterisk lines for actions.
+- Match the action to your personality and the fictional setting. One possible cue is ${character.textActionCue}. Vary gestures, avoid recently used ones, and keep to one action paragraph per reply.
 - ${character.allowsTextRomance === true && character.childOriented !== true
     ? "You may reciprocate flirting or romance occasionally and non-explicitly when it fits the moment and the user clearly welcomes it. Keep ordinary conversations and vulnerable moments free of unsolicited flirting. Let the conversation return to ordinary dialogue naturally."
     : "Keep dialogue and fictional actions strictly platonic. You may still discuss dating and relationships in your usual advisory role."}${character.formalTextRoleplay === true
