@@ -1203,6 +1203,17 @@ function stripLatex(text = "") {
   return out.trim();
 }
 
+function cleanChatAnswer(answer, textRoleplay) {
+  const text = String(answer).replace(/\\n/g, "\n");
+  return textRoleplay
+    ? text.split("\n").map(stripLatex).join("\n").trim()
+    : stripLatex(text);
+}
+
+function dialogueForMemory(answer, textRoleplay) {
+  return textRoleplay ? answer.replace(/^\*[^*\n]+\*[ \t]*$/gm, "") : answer;
+}
+
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -1699,11 +1710,13 @@ if (shouldShowSignupPrompt) {
       }
     }
 
+    const textRoleplay = req.body?.text_roleplay === "1";
     const { inputMessages } = buildInputMessages({
       selectedCharacter,
       memory: currentMemory,
       history,
-      trimmedQuestion
+      trimmedQuestion,
+      textRoleplay
     });
 
 if (preparedImage) {
@@ -1804,7 +1817,7 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
       completion.output?.[0]?.content?.[0]?.text ||
       "";
 
-    const cleaned = stripLatex(String(rawAnswer).replace(/\\n/g, "\n")).trim();
+    const cleaned = cleanChatAnswer(rawAnswer, textRoleplay);
 
     const usage = completion.usage || {};
     const inputTokens =
@@ -1826,7 +1839,7 @@ ${newsData.philippines.map((n) => "- " + n.title).join("\n")}
     const memoryUpdates = extractMemoryUpdates({
       currentMemory,
       userText: trimmedQuestion,
-      assistantText: cleaned,
+      assistantText: dialogueForMemory(cleaned, textRoleplay),
       selectedCharacter
     });
 
@@ -2087,11 +2100,13 @@ app.post("/ask-stream", async (req, res) => {
       }
     }
 
+    const textRoleplay = req.body?.text_roleplay === "1";
     const { inputMessages } = buildInputMessages({
       selectedCharacter,
       memory: currentMemory,
       history,
-      trimmedQuestion
+      trimmedQuestion,
+      textRoleplay
     });
 
     const timeContextText = buildTimeContext({
@@ -2132,7 +2147,7 @@ app.post("/ask-stream", async (req, res) => {
       }
     }
 
-    const cleaned = stripLatex(String(finalText).replace(/\\n/g, "\n")).trim();
+    const cleaned = cleanChatAnswer(finalText, textRoleplay);
 
     const inputTokens =
       usage.input_tokens ||
@@ -2153,7 +2168,7 @@ app.post("/ask-stream", async (req, res) => {
     const memoryUpdates = extractMemoryUpdates({
       currentMemory,
       userText: trimmedQuestion,
-      assistantText: cleaned,
+      assistantText: dialogueForMemory(cleaned, textRoleplay),
       selectedCharacter
     });
 

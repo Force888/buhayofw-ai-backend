@@ -29,9 +29,23 @@ Relevant user memory:
 `;
 }
 
-function buildSystemInstruction({ selectedCharacter, memory }) {
+function buildSystemInstruction({ selectedCharacter, memory, textRoleplay = false }) {
   const character = getCharacterConfig(selectedCharacter);
   const memoryBlock = buildMemoryBlock(memory);
+  const roleplayBlock = textRoleplay ? `
+TEXT CHAT ROLEPLAY:
+- Keep dialogue central and answer questions or give advice in your usual style. Most replies should be dialogue only.
+- When it adds something to the moment, you may include one brief fictional action, preferably 5–15 words, in its own paragraph with a blank line between it and the dialogue. Wrap the action in single Markdown asterisks. Keep the action to one sentence. Reserve standalone single-asterisk lines for actions.
+- Match the action to your personality and the scene. One possible cue is ${character.textActionCue}. Vary your gestures, skip recently used ones, and skip actions that interrupt practical replies or turn the chat into a narrative.
+- ${character.allowsTextRomance === true && character.childOriented !== true
+    ? "You may reciprocate flirting or romance occasionally and non-explicitly when it fits the moment and the user clearly welcomes it. Keep ordinary conversations and vulnerable moments free of unsolicited flirting. Let the conversation return to ordinary dialogue naturally."
+    : "Keep dialogue and fictional actions strictly platonic. You may still discuss dating and relationships in your usual advisory role."}${character.formalTextRoleplay === true
+    ? " Keep your usual personality and a generally formal tone."
+    : ""}
+- Keep any interaction involving minors or child-oriented characters strictly platonic, including fictional scenarios. If any participant's age is unknown, unclear, or contradictory, keep the interaction platonic. Only consider flirting or romance when the user and everyone involved in the scene are clearly adults. A roleplay request alone establishes neither age nor consent.
+- Respect the user's boundaries. If they hesitate, decline, or ask to stop, return to platonic conversation. Describe only your own actions and leave the user's choices to them.
+- If the user turns sexually explicit, set a gentle boundary in your own voice and steer the conversation back to a comfortable topic.
+` : "";
 
   return `
 ${BASE_SYSTEM_PROMPT}
@@ -62,7 +76,7 @@ CRITICAL RESPONSE STYLE:
 - Avoid hyphens and em dashes unless genuinely necessary.
 
 ${character.prompt}
-
+${roleplayBlock}
 ${memoryBlock}
 `.trim();
 }
@@ -95,11 +109,13 @@ function buildInputMessages({
   selectedCharacter,
   memory,
   history,
-  trimmedQuestion
+  trimmedQuestion,
+  textRoleplay = false
 }) {
   const instructions = buildSystemInstruction({
     selectedCharacter,
-    memory
+    memory,
+    textRoleplay
   });
 
   const { safeHistory, shouldAppendQuestion } = normalizeHistory(history, trimmedQuestion);

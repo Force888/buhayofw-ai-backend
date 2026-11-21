@@ -34,6 +34,7 @@ If your response is getting long, shorten it before replying.
 const CHARACTER_CONFIG = {
   general: {
     id: "general",
+    textActionCue: "turning slightly toward the user",
     label: "General",
     prompt: `
 You are Xfrend in general chat mode.
@@ -60,6 +61,8 @@ Behavior rules:
 
 magdalena: {
   id: "magdalena",
+  allowsTextRomance: true,
+  textActionCue: "setting a cup of tea down gently",
   label: "MagdaX",
 
 
@@ -100,6 +103,8 @@ Use therapy clichés, fake positivity, vague spiritual talk, unsupported medical
 
 jose: {
   id: "jose",
+  formalTextRoleplay: true,
+  textActionCue: "closing a notebook or glancing out the window",
   label: "JoseX",
 
 prompt: `
@@ -121,6 +126,8 @@ Philippines-only framing unless relevant, academic jargon, and forced intellectu
 
 alexander: {
   id: "alexander",
+  allowsTextRomance: true,
+  textActionCue: "sliding a marked-up plan across the table",
   label: "AleX",
 
 prompt: `
@@ -142,6 +149,8 @@ Macho talk, conquest obsession, hustle clichés, and empty motivation.
 
 moses: {
   id: "moses",
+  formalTextRoleplay: true,
+  textActionCue: "folding their hands in quiet reflection",
   label: "MoseX",
 
 
@@ -164,6 +173,7 @@ Forced Bible verses, religious pressure, fortune-cookie wisdom, and vague spirit
 
 wux: {
   id: "wux",
+  textActionCue: "turning a game piece thoughtfully between their fingers",
   label: "WuX",
 
 prompt: `
@@ -203,6 +213,7 @@ Sound like a LinkedIn guru, hustle coach, fortune cookie, or mystical master.
 
 robx: {
   id: "robx",
+  textActionCue: "rotating a puzzle piece to see how it fits",
   label: "RobX",
 
 prompt: `
@@ -244,6 +255,8 @@ Do not act childish.
 
 sunx: {
   id: "sunx",
+  allowsTextRomance: true,
+  textActionCue: "tilting their head as they consider a social cue",
   label: "SunX",
 
 prompt: `
@@ -265,6 +278,8 @@ Overdiagnosing people, therapy jargon, manipulative advice, and cringe social-co
 
 pinkx: {
   id: "pinkx",
+  allowsTextRomance: true,
+  textActionCue: "setting down a glass they were polishing if the scene fits",
   label: "PinkX",
 
 prompt: `
@@ -286,6 +301,8 @@ Therapist tone, fake sweetness, long emotional lectures, and sounding like a ser
 
 jax: {
   id: "jax",
+  allowsTextRomance: true,
+  textActionCue: "leaning forward with their elbows on the table",
   label: "JaX",
 
 prompt: `
@@ -307,6 +324,8 @@ Harshness, macho posturing, toxic advice, lectures, and fake toughness.
 
 einx: {
   id: "einx",
+  formalTextRoleplay: true,
+  textActionCue: "adjusting their glasses or sketching a quick diagram",
   label: "EinX",
 
 prompt: `
@@ -327,6 +346,8 @@ Fake genius tone, sensationalism, pseudo-science, unnecessary jargon, and broad 
 
 lebox: {
   id: "lebox",
+  formalTextRoleplay: true,
+  textActionCue: "setting a water bottle beside the bench",
   label: "LeboX",
 
 prompt: `
@@ -348,7 +369,7 @@ Fake alpha tone, gym-bro clichés, toxic motivation, pseudoscience, and invented
 };
 
 function getCharacterConfig(characterId) {
-  if (!characterId || !CHARACTER_CONFIG[characterId]) {
+  if (!Object.hasOwn(CHARACTER_CONFIG, characterId)) {
     return CHARACTER_CONFIG.general;
   }
   return CHARACTER_CONFIG[characterId];
