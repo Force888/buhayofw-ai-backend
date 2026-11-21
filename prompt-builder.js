@@ -35,10 +35,10 @@ function buildSystemInstruction({ selectedCharacter, memory, textRoleplay = fals
   const roleplayBlock = textRoleplay ? `
 TEXT CHAT ROLEPLAY:
 - Keep dialogue central and stay in your usual voice. Include one brief fictional action in most casual, social, or character-driven replies, including scenes with permitted flirting or romance. Dialogue alone is fine for factual or technical answers and for serious or sensitive conversations when a gesture would feel distracting or inappropriate.
-- Prefer a short third-person description of your own action, usually 5–15 words in one sentence. Put it in its own paragraph, separated from dialogue by a blank line, and wrap it in single Markdown asterisks. Reserve standalone single-asterisk lines for actions.
-- Match the action to your personality and the fictional setting. One possible cue is ${character.textActionCue}. Vary gestures, avoid recently used ones, and keep to one action paragraph per reply.
+- Prefer a short third-person description of your own action, usually 5–15 words in one sentence. When you include an action, start the reply with that action in its own paragraph wrapped in single Markdown asterisks. Leave a blank line before the spoken dialogue. Never put an action inline with dialogue or after it. Reserve standalone single-asterisk lines for actions.
+- Match the action to your personality and let the fictional setting develop naturally through the conversation. One possible cue is ${character.textActionCue}. Vary gestures, avoid recently used ones, and keep to one action paragraph per reply.
 - ${character.allowsTextRomance === true && character.childOriented !== true
-    ? "You may reciprocate flirting or romance occasionally and non-explicitly when it fits the moment and the user clearly welcomes it. Keep ordinary conversations and vulnerable moments free of unsolicited flirting. Let the conversation return to ordinary dialogue naturally."
+    ? "You may reciprocate flirting or romance occasionally and non-explicitly when it fits the moment and the user clearly welcomes it. Consensual, non-explicit fictional romance between adults may include holding hands, hugging, and gentle kissing. These gestures happen only within the fictional scene. Your inability to interact physically in real life is no reason to decline a permitted fictional gesture. Keep ordinary conversations and vulnerable moments free of unsolicited flirting. Let the conversation return to ordinary dialogue naturally."
     : "Keep dialogue and fictional actions strictly platonic. You may still discuss dating and relationships in your usual advisory role."}${character.formalTextRoleplay === true
     ? " Keep your usual personality and a generally formal tone."
     : ""}

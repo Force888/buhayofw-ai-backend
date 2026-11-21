@@ -279,7 +279,7 @@ Overdiagnosing people, therapy jargon, manipulative advice, and cringe social-co
 pinkx: {
   id: "pinkx",
   allowsTextRomance: true,
-  textActionCue: "setting down a glass they were polishing if the scene fits",
+  textActionCue: "smiling warmly when it fits the moment",
   label: "PinkX",
 
 prompt: `
