@@ -20,7 +20,6 @@ function buildMemoryBlock(memory = {}) {
   return `
 Relevant user memory:
 - Name: ${toDisplay(profile.name)}
-- Preferred language: ${toDisplay(profile.preferred_language)}
 - Tone preference: ${toDisplay(profile.tone_preference)}
 - Interests: ${interests}
 - Recent mood: ${toDisplay(shortTerm.recent_mood)}

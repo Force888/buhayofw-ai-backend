@@ -1,36 +1,29 @@
+const { languageTag, languageName } = require("./user-context");
+
 function normalizeText(value = "") {
   return String(value || "").trim();
 }
 
+const namedLanguages = new Map([
+  ["tagalog", "tl"], ["filipino", "fil"], ["taglish", "taglish"],
+  ["tagalog and english", "taglish"]
+]);
+for (const first of "abcdefghijklmnopqrstuvwxyz") {
+  for (const second of "abcdefghijklmnopqrstuvwxyz") {
+    const code = first + second;
+    const name = languageName(code).toLowerCase();
+    if (name !== code && !namedLanguages.has(name)) namedLanguages.set(name, code);
+  }
+}
+
 function pickPreferredLanguage(text = "") {
-  const t = text.toLowerCase();
-
-  if (
-    t.includes("taglish") ||
-    t.includes("tagalog and english") ||
-    t.includes("mixed tagalog") ||
-    t.includes("mixed filipino")
-  ) {
-    return "taglish";
-  }
-
-  if (
-    t.includes("tagalog only") ||
-    t.includes("filipino only") ||
-    t.includes("pure tagalog")
-  ) {
-    return "tagalog";
-  }
-
-  if (
-    t.includes("english only") ||
-    t.includes("pure english") ||
-    t.includes("in english")
-  ) {
-    return "english";
-  }
-
-  return "";
+  const request = text.match(/^\s*(?:please\s+)?(?:always\s+)?(?:reply|respond|speak|answer|chat)(?:\s+to\s+me)?(?:\s+in)?\s+([a-z][a-z -]{1,34}?)(?:\s+from now on|,?\s+please|\s+only)?[.!]?\s*$/i)
+    || text.match(/^\s*(?:my preferred language is|i prefer|please use)\s+([a-z][a-z -]{1,34})[.!]?\s*$/i)
+    || text.match(/^\s*([a-z][a-z -]{1,34}?)\s+only[.!]?\s*$/i);
+  if (!request) return "";
+  const name = request[1].toLowerCase().trim();
+  const tag = languageTag(name);
+  return namedLanguages.get(name) || (tag && languageName(tag) !== tag ? tag : "");
 }
 
 function pickTonePreference(text = "") {
@@ -219,5 +212,6 @@ function extractMemoryUpdates({
 }
 
 module.exports = {
-  extractMemoryUpdates
+  extractMemoryUpdates,
+  pickPreferredLanguage
 };
